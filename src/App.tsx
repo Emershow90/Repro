@@ -19,6 +19,10 @@ import { onAuthStateChanged, signInWithPopup, signOut, User as FirebaseUser } fr
 import { auth, googleAuthProvider } from './lib/firebase';
 import { syncOfflineQueue, fetchFromCloud, postLogWithRetry } from './sheetService';
 import { EventBus } from './eventBus';
+import { useSectorStore } from './stores/sectorStore';
+import { useCollaboratorStore } from './stores/collaboratorStore';
+import { useUIStore } from './stores/uiStore';
+import { useHistoryStore } from './stores/historyStore';
 import DashboardMetrics from './components/DashboardMetrics';
 import StopwatchPanel from './components/StopwatchPanel';
 import RankingTable from './components/RankingTable';
@@ -85,7 +89,35 @@ export default function App() {
   const [loadingUser, setLoadingUser] = useState(true);
   const [isGuestMode, setIsGuestMode] = useState(() => localStorage.getItem('repro_guest_mode') === 'true');
 
-  const [logs, setLogs] = useState<Log[]>([]);
+  // Zustand Stores
+  const { activeSectorId, childActiveSector, updateActiveSector } = useSectorStore();
+  const { currentUser, currentRole, activeOperator, updateCurrentUser, updateCurrentRole, setActiveOperator } = useCollaboratorStore();
+  const {
+    activeTab,
+    screensaverEnabled,
+    screensaverTimeout,
+    screensaverActive,
+    toasts,
+    handleTabChange,
+    setScreensaverActive,
+    updateScreensaverEnabled: storeUpdateScreensaverEnabled,
+    updateScreensaverTimeout: storeUpdateScreensaverTimeout,
+    addToast,
+    removeToast
+  } = useUIStore();
+  const {
+    logs,
+    lastSyncTime,
+    isSyncing,
+    isImporting,
+    networkStatus,
+    setLogs,
+    setNetworkStatus,
+    setLastSyncTime,
+    setIsSyncing,
+    setIsImporting,
+  } = useHistoryStore();
+
   const [apiUrl, setApiUrl] = useState(localStorage.getItem('repro_sheets_api_url') || 'https://script.google.com/macros/s/AKfycbzOKrsUqrfa6W3V2leIleNkl6SZAwB5xMUt6qIw0ESMKPY1XS_ffv-QQRJHsYPkenWi/exec');
   
   const [timerState, setTimerState] = useState<AppTimerState>({
@@ -93,92 +125,15 @@ export default function App() {
     rascunhoColab: '',
     rascunhoVol: ''
   });
-  const [activeOperator, setActiveOperator] = useState(localStorage.getItem('repro_active_operator') || '');
   const [inputOpen, setInputOpen] = useState(false);
-
-  
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
-  const [networkStatus, setNetworkStatus] = useState<'online' | 'offline'>('online');
-  const [lastSyncTime, setLastSyncTime] = useState('--:--:--');
-  const [toasts, setToasts] = useState<Toast[]>([]);
   const [ticks, setTicks] = useState(0);
-  const [activeTab, setActiveTab] = useState<'painel' | 'historico' | 'followup'>(() => {
-    const saved = localStorage.getItem('repro_active_tab');
-    if (saved === 'painel' || saved === 'historico' || saved === 'followup') return saved;
-    return 'painel';
-  });
-
-  // Persistent sector focus states
-  const [activeSectorId, setActiveSectorId] = useState(() => localStorage.getItem('repro_active_sector') || 'todos');
-  const [childActiveSector, setChildActiveSector] = useState(() => localStorage.getItem('repro_child_active_sector') || 'Geral');
-
-  // Persistent user profiles and roles
-  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem('repro_current_user') || 'Emerson Gonçalves');
-  const [currentRole, setCurrentRole] = useState(() => localStorage.getItem('repro_current_role') || 'Coordenador');
-
-  // Persistent screensaver configuration
-  const [screensaverEnabled, setScreensaverEnabled] = useState(() => {
-    const saved = localStorage.getItem('repro_screensaver_enabled');
-    return saved !== 'false'; // default to true
-  });
-  const [screensaverTimeout, setScreensaverTimeout] = useState(() => {
-    const saved = localStorage.getItem('repro_screensaver_timeout');
-    return saved ? parseInt(saved, 10) : 5; // default to 5 minutes
-  });
-  const [screensaverActive, setScreensaverActive] = useState(false);
-
-  // Setters that persist to localStorage immediately and reactively
-  const handleTabChange = (tab: 'painel' | 'historico' | 'followup') => {
-    setActiveTab(tab);
-    localStorage.setItem('repro_active_tab', tab);
-  };
-
-  const updateActiveSector = (sector: string) => {
-    setActiveSectorId(sector);
-    localStorage.setItem('repro_active_sector', sector);
-    // Automatically map childActiveSector names based on choice
-    const subsectors: Record<string, string> = {
-      todos: 'Geral',
-      '87': 'Setor 87 - Repro / Operações',
-      '88': 'Setor 88 - Repro / Operações',
-      '89': 'Setor 89 - Repro / Operações',
-      '90': 'Setor 90 - Repro / Operações',
-      rececao: 'Cais de Entrada',
-      armazenagem: 'Estanteria / Corredores',
-      picking: 'Estações de Preparação',
-      expedicao: 'Cais de Saída',
-      devolucoes: 'Área de Triagem'
-    };
-    const sub = subsectors[sector] || 'Geral';
-    setChildActiveSector(sub);
-    localStorage.setItem('repro_child_active_sector', sub);
-    addToast(`Foco Setorial alterado para: ${sector.toUpperCase()} (${sub})`, 'var(--color-terminal-accent)');
-  };
-
-  const updateCurrentUser = (user: string) => {
-    if (!user.trim()) return;
-    setCurrentUser(user);
-    localStorage.setItem('repro_current_user', user);
-  };
-
-  const updateCurrentRole = (role: string) => {
-    role = role.trim();
-    setCurrentRole(role);
-    localStorage.setItem('repro_current_role', role);
-    addToast(`Função de acesso alterada para: ${role.toUpperCase()}`, 'var(--color-info)');
-  };
 
   const updateScreensaverEnabled = (enabled: boolean) => {
-    setScreensaverEnabled(enabled);
-    localStorage.setItem('repro_screensaver_enabled', String(enabled));
-    addToast(`Protetor de ecrã: ${enabled ? 'ATIVADO' : 'DESATIVADO'}`, 'var(--color-info)');
+    storeUpdateScreensaverEnabled(enabled, addToast);
   };
 
   const updateScreensaverTimeout = (timeout: number) => {
-    setScreensaverTimeout(timeout);
-    localStorage.setItem('repro_screensaver_timeout', String(timeout));
-    addToast(`Tempo limite do protetor: ${timeout} Minutos`, 'var(--color-info)');
+    storeUpdateScreensaverTimeout(timeout, addToast);
   };
 
   // Dynamically filtered logs based on active sector focus
@@ -288,14 +243,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [user, logs, networkStatus]);
 
-  // Helper to trigger toast alerts
-  const addToast = (msg: string, col = 'var(--color-terminal-accent)') => {
-    const id = Date.now() + Math.random();
-    setToasts(prev => [...prev, { id, message: msg, color: col }]);
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 4500);
-  };
+
 
   // Monitor online status
   useEffect(() => {
