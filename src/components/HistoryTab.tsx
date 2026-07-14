@@ -32,6 +32,7 @@ import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import { saveLog, deleteLog } from '../dbLocal';
 import { auth } from '../lib/firebase';
+import { saveLogsDirectly } from '../utils/supabase/client';
 import { EventBus } from '../eventBus';
 
 // Constants
@@ -419,21 +420,11 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
 
       if (currentUser && isOnline) {
         try {
-          const token = await currentUser.getIdToken();
-          const response = await fetch('/api/records/sync', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ logs: logsToSave })
-          });
-          if (response.ok) {
-            logsToSave = logsToSave.map(l => ({ ...l, synced: true }));
-            syncSuccess = true;
-          }
-        } catch (syncErr) {
-          console.error("Erro ao sincronizar importação na nuvem:", syncErr);
+          await saveLogsDirectly(logsToSave, currentUser.uid);
+          logsToSave = logsToSave.map(l => ({ ...l, synced: true }));
+          syncSuccess = true;
+        } catch (syncErr: any) {
+          console.error("Erro ao sincronizar importação na nuvem Supabase:", syncErr);
         }
       }
 
@@ -443,7 +434,7 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
       }
 
       if (syncSuccess) {
-        onAddToast(`${validRowsToImport.length} registos importados e sincronizados na nuvem PostgreSQL!`, 'var(--color-success)');
+        onAddToast(`${validRowsToImport.length} registos importados e sincronizados na nuvem Supabase!`, 'var(--color-success)');
       } else {
         onAddToast(`${validRowsToImport.length} registos importados localmente no IndexedDB.`, 'var(--color-success)');
       }

@@ -12,12 +12,14 @@ interface UIState {
   screensaverTimeout: number;
   screensaverActive: boolean;
   toasts: Toast[];
+  supabaseLoading: boolean;
   handleTabChange: (tab: 'painel' | 'historico' | 'followup') => void;
   setScreensaverActive: (active: boolean) => void;
   updateScreensaverEnabled: (enabled: boolean, addToast?: (msg: string, col?: string) => void) => void;
   updateScreensaverTimeout: (timeout: number, addToast?: (msg: string, col?: string) => void) => void;
   addToast: (msg: string, col?: string) => void;
   removeToast: (id: number) => void;
+  setSupabaseLoading: (loading: boolean) => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -33,6 +35,7 @@ export const useUIStore = create<UIState>((set) => ({
   })(),
   screensaverActive: false,
   toasts: [],
+  supabaseLoading: false,
   handleTabChange: (tab) => {
     localStorage.setItem('repro_active_tab', tab);
     set({ activeTab: tab });
@@ -68,4 +71,5 @@ export const useUIStore = create<UIState>((set) => ({
       toasts: state.toasts.filter((t) => t.id !== id),
     }));
   },
+  setSupabaseLoading: (loading) => set({ supabaseLoading: loading }),
 }));

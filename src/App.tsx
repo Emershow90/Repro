@@ -18,6 +18,14 @@ import {
 import { onAuthStateChanged, signInWithPopup, signOut, User as FirebaseUser } from 'firebase/auth';
 import { auth, googleAuthProvider } from './lib/firebase';
 import { syncOfflineQueue, fetchFromCloud, postLogWithRetry } from './sheetService';
+import {
+  syncPerfilDirectly,
+  fetchPerfilDirectly,
+  saveLogsDirectly,
+  fetchLogsDirectly,
+  deleteLogDirectly,
+  clearLogsDirectly
+} from './utils/supabase/client';
 import { EventBus } from './eventBus';
 import { useSectorStore } from './stores/sectorStore';
 import { useCollaboratorStore } from './stores/collaboratorStore';
@@ -103,7 +111,9 @@ export default function App() {
     updateScreensaverEnabled: storeUpdateScreensaverEnabled,
     updateScreensaverTimeout: storeUpdateScreensaverTimeout,
     addToast,
-    removeToast
+    removeToast,
+    supabaseLoading,
+    setSupabaseLoading
   } = useUIStore();
   const {
     logs,
@@ -155,49 +165,54 @@ export default function App() {
         setIsGuestMode(false);
         localStorage.setItem('repro_guest_mode', 'false');
         
+        setSupabaseLoading(true);
         try {
-          const token = await currentUser.getIdToken();
-          // Sync user on backend PostgreSQL
-          await fetch('/api/auth/sync-user', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            }
-          });
+          const email = currentUser.email || '';
+          const displayName = currentUser.displayName || currentUser.email || '';
           
-          addToast(`Sessão iniciada como ${currentUser.displayName || currentUser.email}`, 'var(--color-success)');
+          // 1. Sync or retrieve user profile in Supabase
+          const existingPerfil = await fetchPerfilDirectly(currentUser.uid);
+          let role = 'Pendente';
+          let sector = 'Geral';
           
-          // Pull and sync records from PostgreSQL
-          const response = await fetch('/api/records', {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
-          if (response.ok) {
-            const cloudRecords = await response.json();
-            for (const rec of cloudRecords) {
-              await saveLog({
-                id: rec.id,
-                data: rec.data,
-                dia: rec.dia,
-                semana: rec.semana,
-                atividade: rec.atividade,
-                colaborador: rec.colaborador,
-                volumes: rec.volumes,
-                horas: rec.horas,
-                vph: rec.vph,
-                timestamp: rec.timestamp,
-                synced: true,
-                tipo: rec.tipo
-              });
-            }
-            const refreshed = await getLogs();
-            setLogs(refreshed);
+          if (existingPerfil) {
+            role = existingPerfil.role || 'Pendente';
+            sector = existingPerfil.sector || 'Geral';
+            updateCurrentRole(role);
+          } else {
+            await syncPerfilDirectly(currentUser.uid, email, displayName, 'Pendente', 'Geral');
           }
-        } catch (err) {
-          console.error("Cloud PostgreSQL sync error:", err);
-          addToast("Erro ao sincronizar dados com PostgreSQL.", 'var(--color-danger)');
+          
+          addToast(`Sessão iniciada como ${displayName}. Perfil: ${role}`, 'var(--color-success)');
+          
+          // 2. Pull and sync records from Supabase
+          const cloudRecords = await fetchLogsDirectly(currentUser.uid);
+          for (const rec of cloudRecords) {
+            await saveLog({
+              id: rec.id,
+              data: rec.data,
+              dia: rec.dia,
+              semana: rec.semana,
+              atividade: rec.atividade,
+              colaborador: rec.colaborador,
+              setor: rec.setor,
+              volumes: rec.volumes,
+              horas: rec.horas,
+              vph: rec.vph,
+              timestamp: rec.timestamp,
+              synced: true,
+              tipo: rec.tipo
+            });
+          }
+          const refreshed = await getLogs();
+          setLogs(refreshed);
+        } catch (err: any) {
+          console.error("Cloud Supabase sync error:", err);
+          const errorCode = err.code || 'N/A';
+          const errorMsg = err.message || 'Erro de conexão';
+          addToast(`Erro ao sincronizar dados com Supabase: ${errorMsg} [Código: ${errorCode}]`, 'var(--color-danger)');
+        } finally {
+          setSupabaseLoading(false);
         }
       } else {
         setUser(null);
@@ -215,28 +230,23 @@ export default function App() {
       const unsyncedLogs = logs.filter(l => !l.synced);
       if (unsyncedLogs.length === 0) return;
       
+      setSupabaseLoading(true);
       try {
-        const token = await user.getIdToken();
-        const response = await fetch('/api/records/sync', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ logs: unsyncedLogs })
-        });
-        if (response.ok) {
-          for (const l of unsyncedLogs) {
-            await saveLog({ ...l, synced: true });
-          }
-          const refreshed = await getLogs();
-          setLogs(refreshed);
-          const now = new Date();
-          setLastSyncTime(now.toLocaleTimeString('pt-PT'));
-          addToast(`${unsyncedLogs.length} logs pendentes sincronizados na nuvem PostgreSQL!`, 'var(--color-success)');
+        await saveLogsDirectly(unsyncedLogs, user.uid);
+        for (const l of unsyncedLogs) {
+          await saveLog({ ...l, synced: true });
         }
-      } catch (err) {
-        console.error("Periodic PostgreSQL sync failed:", err);
+        const refreshed = await getLogs();
+        setLogs(refreshed);
+        const now = new Date();
+        setLastSyncTime(now.toLocaleTimeString('pt-PT'));
+        addToast(`${unsyncedLogs.length} logs pendentes sincronizados na nuvem Supabase!`, 'var(--color-success)');
+      } catch (err: any) {
+        console.error("Periodic Supabase sync failed:", err);
+        const errorCode = err.code || 'N/A';
+        addToast(`Erro de sincronização em segundo plano [Código: ${errorCode}]`, 'var(--color-danger)');
+      } finally {
+        setSupabaseLoading(false);
       }
     }, 25000);
     
@@ -589,21 +599,16 @@ export default function App() {
       addToast("Registo removido localmente.", 'var(--color-warning)');
       
       if (user && networkStatus === 'online') {
+        setSupabaseLoading(true);
         try {
-          const token = await user.getIdToken();
-          const response = await fetch(`/api/records/${id}`, {
-            method: 'DELETE',
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
-          if (response.ok) {
-            addToast("Registo removido da nuvem PostgreSQL!", 'var(--color-success)');
-          } else {
-            addToast("Falha ao sincronizar remoção na nuvem.", 'var(--color-warning)');
-          }
-        } catch (err) {
+          await deleteLogDirectly(id, user.uid);
+          addToast("Registo removido da nuvem Supabase!", 'var(--color-success)');
+        } catch (err: any) {
           console.error("Cloud delete error:", err);
+          const errorCode = err.code || 'N/A';
+          addToast(`Falha ao sincronizar remoção na nuvem [Código: ${errorCode}]`, 'var(--color-warning)');
+        } finally {
+          setSupabaseLoading(false);
         }
       }
       
@@ -640,17 +645,16 @@ export default function App() {
       await clearLogsAndState();
       
       if (user && networkStatus === 'online') {
+        setSupabaseLoading(true);
         try {
-          const token = await user.getIdToken();
-          await fetch('/api/records', {
-            method: 'DELETE',
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
+          await clearLogsDirectly(user.uid);
           addToast("Base de dados cloud redefinida.", 'var(--color-danger)');
-        } catch (err) {
+        } catch (err: any) {
           console.error("Cloud clear error:", err);
+          const errorCode = err.code || 'N/A';
+          addToast(`Falha ao redefinir base de dados cloud [Código: ${errorCode}]`, 'var(--color-danger)');
+        } finally {
+          setSupabaseLoading(false);
         }
       }
       
@@ -659,8 +663,6 @@ export default function App() {
         rascunhoColab: '',
         rascunhoVol: ''
       });
-      
-      
       
       setLogs([]);
       addToast("Base de dados local redefinida com sucesso.", 'var(--color-danger)');
@@ -775,6 +777,17 @@ export default function App() {
 
   return (
     <div className="terminal-root p-4 md:p-8 flex flex-col items-center">
+      
+      {/* Global Supabase Loading Progress and Spinner feedback */}
+      {supabaseLoading && (
+        <div className="fixed top-0 left-0 w-full z-50 pointer-events-none">
+          <div className="h-1 bg-gradient-to-r from-transparent via-terminal-accent to-transparent animate-pulse w-full"></div>
+          <div className="absolute right-4 top-4 flex items-center gap-2 bg-black/85 border border-terminal-accent/60 px-3 py-1.5 rounded text-[10px] font-mono text-terminal-accent shadow-2xl animate-pulse">
+            <Loader2 size={12} className="animate-spin text-terminal-accent" />
+            CONECTANDO AO SUPABASE...
+          </div>
+        </div>
+      )}
       
       {/* Toast Alert stack overlay */}
       <div className="fixed bottom-6 right-6 flex flex-col gap-2 z-50 pointer-events-none">

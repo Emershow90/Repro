@@ -5,53 +5,34 @@
 
 import { Log } from './types';
 import { saveLog, getLogs } from './dbLocal';
-import { EventBus } from './eventBus';
+import { auth } from './lib/firebase';
+import { saveLogsDirectly, fetchLogsDirectly } from './utils/supabase/client';
 
-// Post with exponential backoff retry mechanism to ensure data consistency
+/**
+ * Saves a log directly to Supabase with automatic retry
+ */
 export async function postLogWithRetry(
-  url: string,
+  apiUrl: string,
   log: Log,
   maxAttempts = 5
 ): Promise<boolean> {
-  let attempt = 0;
-  
-  // Format the payload with purified keys and legac keys for compatibility
-  const payload = {
-    id: log.id,
-    data: log.data,
-    dia: log.dia,
-    semana: log.dia, // Mapped for backward compatibility but script uses semana
-    semanaAno: log.semana,
-    atividade: log.atividade,
-    colaborador: log.colaborador,
-    setor: log.setor,
-    volume: log.volumes,
-    enderecos: log.volumes, // fallback
-    qtdEnderecos: log.volumes,
-    horas: log.horas,
-    vph: log.vph,
-    eph: log.vph, // fallback
-    timestamp: log.timestamp
-  };
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    console.warn("No authenticated user found for Supabase post log operation.");
+    return false;
+  }
 
+  let attempt = 0;
   while (attempt < maxAttempts) {
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      
-      if (response.ok) {
-        return true;
-      }
+      await saveLogsDirectly([log], currentUser.uid);
+      return true;
     } catch (err) {
-      console.warn(`Sync attempt ${attempt + 1} failed for log ID ${log.id}:`, err);
+      console.warn(`Sync attempt ${attempt + 1} failed to Supabase for log ID ${log.id}:`, err);
     }
     
     attempt++;
     if (attempt < maxAttempts) {
-      // Exponential backoff with a bit of random jitter
       const delay = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 400, 12000);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
@@ -60,11 +41,16 @@ export async function postLogWithRetry(
   return false;
 }
 
+/**
+ * Synchronizes the offline queue (unsynced logs) to the Supabase logs table
+ */
 export async function syncOfflineQueue(
   apiUrl: string,
   onProgress?: (syncedCount: number) => void
 ): Promise<{ successCount: number; failedCount: number }> {
-  if (!apiUrl) {
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    console.warn("User must be authenticated to sync offline queue to Supabase.");
     return { successCount: 0, failedCount: 0 };
   }
 
@@ -92,7 +78,6 @@ export async function syncOfflineQueue(
       }
     } else {
       failedCount++;
-      // Stop synchronization of the queue if we have a hard network failure
       break;
     }
   }
@@ -100,59 +85,20 @@ export async function syncOfflineQueue(
   return { successCount, failedCount };
 }
 
+/**
+ * Recovers logs from the Supabase logs table for the authenticated user
+ */
 export async function fetchFromCloud(apiUrl: string): Promise<Log[]> {
-  const response = await fetch(apiUrl, { redirect: 'follow' });
-  if (!response.ok) {
-    throw new Error("Failed to contact Google Sheets API");
-  }
-  const cloudData = await response.json();
-  if (!Array.isArray(cloudData)) {
-    throw new Error("Invalid response format from cloud sheets");
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error("User must be authenticated to fetch logs from Supabase cloud.");
   }
 
-  const parsedLogs: Log[] = [];
-  
-  for (const item of cloudData) {
-    const idNum = Number(item.id || Date.now());
-    
-    // Parse activity type
-    const isIndirect = String(item.atividade || '').startsWith('IND:') || item.tipo === 'indireta';
-    
-    // Tolerant volume keys parsing
-    let parsedVolume = 0;
-    if (item.volume !== undefined) {
-      parsedVolume = Number(item.volume);
-    } else if (item.volume === undefined && item.volume_processado !== undefined) {
-      parsedVolume = Number(item.volume_processado);
-    } else if (item.enderecos !== undefined) {
-      parsedVolume = Number(item.enderecos);
-    } else if (item.ends !== undefined) {
-      parsedVolume = Number(item.ends);
-    }
-
-    // Tolerant vph parsing
-    let parsedVph = "0.00";
-    if (item.vph !== undefined) {
-      parsedVph = String(item.vph);
-    } else if (item.eph !== undefined) {
-      parsedVph = String(item.eph);
-    }
-
-    parsedLogs.push({
-      id: idNum,
-      data: String(item.data || ''),
-      dia: String(item.dia || ''),
-      semana: Number(item.semana || 1),
-      atividade: String(item.atividade || ''),
-      colaborador: String(item.colaborador || ''),
-      volumes: parsedVolume,
-      horas: Number(item.horas || 0),
-      vph: parsedVph,
-      timestamp: idNum,
-      synced: true,
-      tipo: isIndirect ? 'indireta' : 'direta'
-    });
+  try {
+    const cloudLogs = await fetchLogsDirectly(currentUser.uid);
+    return cloudLogs;
+  } catch (err: any) {
+    console.error("Failed to fetch logs from Supabase:", err);
+    throw new Error(`Failed to contact Supabase API: ${err.message || err}`);
   }
-
-  return parsedLogs;
 }

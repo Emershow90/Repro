@@ -4,19 +4,20 @@
 -- 1. Enable any required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 2. Create the 'users' table (compatible with Firebase Auth UID or Custom Auth UID)
-CREATE TABLE IF NOT EXISTS users (
-  id SERIAL PRIMARY KEY,
-  uid TEXT NOT NULL UNIQUE, -- Stores the Firebase Auth UID or Supabase Auth UID
+-- 2. Create the 'perfil' table for managing user permissions authenticated via Firebase Auth
+CREATE TABLE IF NOT EXISTS perfil (
+  uid TEXT PRIMARY KEY, -- Stores the Firebase Auth UID directly
   email TEXT NOT NULL,
   name TEXT,
+  role TEXT DEFAULT 'Pendente' CHECK (role IN ('Coordenador', 'Operador', 'Pendente', 'Administrador')),
+  sector TEXT DEFAULT 'Geral',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 3. Create the 'records' table to persist log entries
-CREATE TABLE IF NOT EXISTS records (
+-- 3. Create the 'logs' table to persist log entries
+CREATE TABLE IF NOT EXISTS logs (
   id DOUBLE PRECISION PRIMARY KEY, -- Using double precision to safely store JavaScript Date.now() + Math.random()
-  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  user_uid TEXT REFERENCES perfil(uid) ON DELETE CASCADE,
   data TEXT NOT NULL,
   dia TEXT NOT NULL,
   semana INTEGER NOT NULL,
@@ -33,10 +34,10 @@ CREATE TABLE IF NOT EXISTS records (
 );
 
 -- 4. Set up database indexes for fast query performance
-CREATE INDEX IF NOT EXISTS idx_records_user_id ON records(user_id);
-CREATE INDEX IF NOT EXISTS idx_records_timestamp ON records(timestamp);
-CREATE INDEX IF NOT EXISTS idx_users_uid ON users(uid);
+CREATE INDEX IF NOT EXISTS idx_logs_user_uid ON logs(user_uid);
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_perfil_email ON perfil(email);
 
 -- 5. Enable Row Level Security (RLS) if desired (optional)
--- ALTER TABLE users ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE records ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE perfil ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE logs ENABLE ROW LEVEL SECURITY;
