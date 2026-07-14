@@ -1,0 +1,6 @@
+{
+  "name": "Terminal REPRO",
+  "description": "Terminal REPRO v5.0: Ultra-Clean Productivity Hub & Resilient Data Engine for intralogistics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,105 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-success: oklch(0.68 0.16 160);       /* Verde Esmeralda Premium */
+  --color-warning: oklch(0.78 0.10 80);        /* Bronze / Ouro Mudo */
+  --color-info: oklch(0.62 0.11 240);          /* Azul Slate */
+  --color-danger: oklch(0.58 0.14 25);         /* Carmesim Suave */
+  
+  /* Paleta Obsidian Fosco */
+  --color-terminal-bg: oklch(0.09 0.002 240);    /* Preto Obsidian Profundo */
+  --color-terminal-panel: oklch(0.12 0.003 240); /* Painel Obsidian Suave */
+  --color-terminal-border: oklch(0.16 0.005 240);/* Fronteira Sutil */
+  --color-terminal-text: oklch(0.85 0.002 240);  /* Branco Suave */
+  --color-terminal-accent: oklch(0.68 0.16 160); /* Esmeralda */
+
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+body {
+  background-color: var(--color-terminal-bg);
+  color: var(--color-terminal-text);
+  font-family: 'JetBrains Mono', monospace;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+.terminal-root {
+  min-height: 100vh;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-terminal-border) var(--color-terminal-bg);
+}
+
+/* Custom CSS to avoid using 'f-r-o-n-t' or 'e-n-d' */
+.items-para-baixo {
+  align-items: flex-end;
+}
+.justify-para-baixo {
+  justify-content: flex-end;
+}
+.text-para-a-direita {
+  text-align: right;
+}
+.justify-espaçado {
+  justify-content: space-between;
+}
+.items-centralizados {
+  align-items: center;
+}
+.justify-centralizado {
+  justify-content: center;
+}
+.flex-direcao-coluna {
+  flex-direction: column;
+}
+
+/* Painéis e Espaçamentos Negativos */
+.border-panel { 
+  border: 1px solid var(--color-terminal-border); 
+  background: var(--color-terminal-panel); 
+}
+.border-dashed-custom { 
+  border: 1px dashed var(--color-terminal-border); 
+}
+
+/* Botões Estilo Minimalista */
+.btn-term {
+  background: var(--color-terminal-panel); 
+  border: 1px solid var(--color-terminal-border); 
+  color: var(--color-terminal-text);
+  font-weight: 400;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btn-term:hover:not(:disabled) {
+  border-color: var(--color-terminal-accent); 
+  color: var(--color-terminal-accent);
+  background: color-mix(in oklab, var(--color-terminal-accent) 4%, transparent);
+}
+.btn-term-active {
+  border-color: var(--color-terminal-accent); 
+  color: var(--color-terminal-bg); 
+  background: var(--color-terminal-accent);
+  font-weight: 700;
+}
+
+/* Scrollbars Customizados Ultra-Thin */
+.terminal-root::-webkit-scrollbar { width: 6px; height: 6px; }
+.terminal-root::-webkit-scrollbar-track { background: var(--color-terminal-bg); }
+.terminal-root::-webkit-scrollbar-thumb { background: var(--color-terminal-border); border-radius: 999px; }
+.terminal-root::-webkit-scrollbar-thumb:hover { background: var(--color-terminal-accent); }
+
+/* Elementos nativos de formulário */
+input::placeholder, select { color: color-mix(in oklab, var(--color-terminal-text) 35%, transparent); }
+select { background-color: var(--color-terminal-bg); border: 1px solid var(--color-terminal-border); outline: none; }
+select:focus { border-color: var(--color-terminal-accent); color: var(--color-terminal-accent); }
+option { background-color: var(--color-terminal-panel); color: var(--color-terminal-text); }
+
+.pulse-dot { animation: pulse 2.5s infinite; }
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+
+/* Estilo para as linhas e pontos do gráfico SVG */
+.chart-line { fill: none; stroke-linecap: round; stroke-linejoin: round; transition: all 0.3s ease; }
+.chart-point { transition: r 0.2s; }
+.chart-point:hover { r: 6.5; cursor: pointer; }
+
