@@ -4,6 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Terminal REPRO v5.0 // Torre de Comando</title>
+    <script>
+      // Clear any service workers that might be intercepting and causing "Resource was not cached" errors
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+          for (const registration of registrations) {
+            registration.unregister().then(success => {
+              if (success) {
+                console.log('Unregistered stale service worker successfully.');
+                window.location.reload();
+              }
+            });
+          }
+        });
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
