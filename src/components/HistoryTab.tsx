@@ -263,21 +263,36 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
         const parsedRows: ParsedImportRow[] = [];
 
         for (const row of jsonRows) {
-          // Identify columns dynamically mapping standard Portuguese headers
-          const rawData = row['Data'] || row['DATA'] || row['Date'] || row['date'] || '';
-          const rawSetor = row['Setor'] || row['SETOR'] || row['setor'] || '';
-          const rawColaborador = row['Colaborador'] || row['COLABORADOR'] || row['Nome'] || row['nome'] || row['Name'] || '';
-          const rawAtividade = row['Atividade'] || row['ATIVIDADE'] || row['Operação'] || row['O que foi feito no Repro'] || row['Atividade no Repro'] || '';
-          const rawVolumes = row['Quantidade de Endereços'] || row['Quantidade de Enderecos'] || row['Endereços'] || row['Enderecos'] || row['Volumes'] || row['VOLUMES'] || row['Qtd'] || row['QTD'] || row['Volume'] || 0;
-          const rawHoras = row['Horas Utilizadas'] || row['Horas'] || row['HORAS'] || row['Tempo'] || row['Horas Gastas'] || 0;
-          const rawVph = row['Produtividade'] || row['VPH'] || row['vph'] || '';
+          // Normalize row keys (trim whitespace)
+          const normalizedRow: Record<string, any> = {};
+          for (const key of Object.keys(row)) {
+            normalizedRow[key.trim()] = row[key];
+          }
+
+          // Identify columns dynamically mapping standard Portuguese headers from "Controle de horas - Repro"
+          const rawData = normalizedRow['Data'] || normalizedRow['DATA'] || normalizedRow['Date'] || normalizedRow['date'] || '';
+          const rawSetor = normalizedRow['Setor'] || normalizedRow['SETOR'] || normalizedRow['setor'] || '87';
+          const rawColaborador = normalizedRow['Colaborador'] || normalizedRow['COLABORADOR'] || normalizedRow['Nome'] || normalizedRow['nome'] || normalizedRow['Name'] || '';
+          const rawAtividade = normalizedRow['O que foi feito no Repro'] || normalizedRow['Atividade'] || normalizedRow['ATIVIDADE'] || normalizedRow['Operação'] || normalizedRow['Atividade no Repro'] || 'Repro';
+          const rawVolumes = normalizedRow['QTD endereços'] || normalizedRow['Quantidade de Endereços'] || normalizedRow['Quantidade de Enderecos'] || normalizedRow['Endereços'] || normalizedRow['Enderecos'] || normalizedRow['Volumes'] || normalizedRow['VOLUMES'] || normalizedRow['Qtd'] || normalizedRow['QTD'] || 0;
+          const rawHoras = normalizedRow['Horas usadas'] || normalizedRow['Horas Utilizadas'] || normalizedRow['Horas'] || normalizedRow['HORAS'] || normalizedRow['Tempo'] || 0;
+          const rawVph = normalizedRow['Produtividade'] || normalizedRow['VPH'] || normalizedRow['vph'] || '';
 
           // Validate fields
           const colaborador = String(rawColaborador).toUpperCase().trim();
           const atividade = String(rawAtividade).trim();
-          const volumes = parseInt(String(rawVolumes), 10);
-          const horas = parseFloat(String(rawHoras));
-          const setorStr = String(rawSetor).trim();
+          
+          // Parse Portuguese number formatting (e.g. "3,00" -> 3.00)
+          const parsePtFloat = (v: any) => {
+            if (typeof v === 'number') return v;
+            if (!v) return 0;
+            const str = String(v).replace(',', '.');
+            return parseFloat(str) || 0;
+          };
+
+          const volumes = parsePtFloat(rawVolumes);
+          const horas = parsePtFloat(rawHoras);
+          const setorStr = String(rawSetor).trim() || '87';
 
           let parsedDateObj = parseDateString(rawData);
           

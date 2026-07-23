@@ -20,7 +20,7 @@ export default function RecentLogsTable({
 }: RecentLogsTableProps) {
   return (
     <section className="border-panel p-6 rounded-sm">
-      <div className="flex flex-col sm:flex-row justify-espaçado items-start sm:items-centralizados mb-6 border-b border-terminal-border/40 pb-3">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 border-b border-terminal-border/40 pb-3">
         <div>
           <h2 className="text-xs font-bold text-white uppercase tracking-widest opacity-60">
             REGISTO DE OPERAÇÕES RECENTES
@@ -36,12 +36,13 @@ export default function RecentLogsTable({
           <thead>
             <tr className="text-[0.55rem] uppercase tracking-widest text-terminal-text opacity-40 border-b border-terminal-border/40 bg-terminal-bg/50">
               <th className="p-3 font-medium text-center">Nuvem</th>
+              <th className="p-3 font-medium">Setor</th>
               <th className="p-3 font-medium">Data</th>
               <th className="p-3 font-medium text-white">Atividade</th>
               <th className="p-3 font-medium text-terminal-accent">Colaborador</th>
-              <th className="p-3 font-medium text-para-a-direita">Volumes</th>
-              <th className="p-3 font-medium text-para-a-direita">Horas</th>
-              <th className="p-3 font-medium text-para-a-direita text-terminal-accent">VPH</th>
+              <th className="p-3 font-medium text-right">Volumes</th>
+              <th className="p-3 font-medium text-right">Horas</th>
+              <th className="p-3 font-medium text-right text-terminal-accent">VPH</th>
               <th className="p-3 font-medium text-center">Del</th>
             </tr>
           </thead>
@@ -61,6 +62,9 @@ export default function RecentLogsTable({
                       <span className="text-warning font-bold animate-pulse">⏳</span>
                     )}
                   </td>
+                  <td className="p-3 font-mono font-bold text-terminal-accent">
+                    Setor {log.setor || '87'}
+                  </td>
                   <td className="p-3 text-terminal-text opacity-50">{log.data}</td>
                   <td className="p-3 text-white">
                     <span className={`px-2 py-0.5 rounded-sm border ${badgeClass} text-[0.6rem] uppercase`}>
@@ -70,13 +74,13 @@ export default function RecentLogsTable({
                   <td className={`p-3 font-bold uppercase ${ehIndireta ? 'text-warning/80' : 'text-terminal-accent'}`}>
                     {log.colaborador}
                   </td>
-                  <td className="p-3 text-para-a-direita text-white">
+                  <td className="p-3 text-right text-white">
                     {log.volumes}
                   </td>
-                  <td className="p-3 text-para-a-direita text-warning font-bold">
+                  <td className="p-3 text-right text-warning font-bold">
                     {log.horas.toFixed(2)}h
                   </td>
-                  <td className="p-3 text-para-a-direita text-terminal-accent font-bold">
+                  <td className="p-3 text-right text-terminal-accent font-bold">
                     {log.vph}
                   </td>
                   <td className="p-3 text-center">
@@ -92,7 +96,7 @@ export default function RecentLogsTable({
             })}
             {logs.length === 0 && (
               <tr>
-                <td colSpan={8} className="text-center p-6 text-terminal-text opacity-30 tracking-widest text-[0.6rem]">
+                <td colSpan={9} className="text-center p-6 text-terminal-text opacity-30 tracking-widest text-[0.6rem]">
                   BASE LOCAL VAZIA
                 </td>
               </tr>

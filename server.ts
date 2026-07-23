@@ -19,6 +19,58 @@ async function startServer() {
     res.json({ status: "OK", timestamp: new Date().toISOString() });
   });
 
+  // API: Google Apps Script CORS Proxy (GET and POST)
+  app.get("/api/sheets/proxy", async (req, res) => {
+    try {
+      const { apiUrl } = req.query;
+      if (!apiUrl || typeof apiUrl !== "string" || !apiUrl.startsWith("http")) {
+        return res.status(400).json({ error: "URL da API do Google Sheets inválida ou ausente." });
+      }
+
+      const response = await fetch(apiUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const data = await response.json();
+        return res.json(data);
+      } else {
+        const text = await response.text();
+        try {
+          const json = JSON.parse(text);
+          return res.json(json);
+        } catch {
+          return res.send(text);
+        }
+      }
+    } catch (err: any) {
+      console.error("Sheets proxy GET error:", err);
+      res.status(500).json({ error: `Erro na comunicação do servidor com Google Sheets: ${err.message}` });
+    }
+  });
+
+  app.post("/api/sheets/proxy", async (req, res) => {
+    try {
+      const { apiUrl, payload } = req.body;
+      if (!apiUrl || typeof apiUrl !== "string" || !apiUrl.startsWith("http")) {
+        return res.status(400).json({ error: "URL da API do Google Sheets inválida ou ausente." });
+      }
+
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload || {}),
+      });
+
+      res.json({ status: "success", statusCode: response.status, ok: response.ok });
+    } catch (err: any) {
+      console.error("Sheets proxy POST error:", err);
+      res.status(500).json({ error: `Erro ao enviar dados para Google Sheets via servidor: ${err.message}` });
+    }
+  });
+
   // API: Sync User auth/profile
   app.post("/api/auth/sync-user", requireAuth, async (req: AuthRequest, res) => {
     try {

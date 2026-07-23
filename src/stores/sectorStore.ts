@@ -1,13 +1,16 @@
 import { create } from 'zustand';
 
-interface SectorState {
+export const VALID_SECTORS = ['87', '88', '89', '90'] as const;
+export type ValidSector = typeof VALID_SECTORS[number];
+
+export interface SectorState {
   activeSectorId: string;
   childActiveSector: string;
   updateActiveSector: (sector: string, addToast?: (msg: string, col?: string) => void) => void;
 }
 
-const subsectors: Record<string, string> = {
-  todos: 'Geral',
+export const SECTOR_NAMES: Record<string, string> = {
+  todos: 'Todos os Setores (87, 88, 89, 90)',
   '87': 'Setor 87 - Repro / Operações',
   '88': 'Setor 88 - Repro / Operações',
   '89': 'Setor 89 - Repro / Operações',
@@ -20,15 +23,16 @@ const subsectors: Record<string, string> = {
 };
 
 export const useSectorStore = create<SectorState>((set) => ({
-  activeSectorId: localStorage.getItem('repro_active_sector') || 'todos',
-  childActiveSector: localStorage.getItem('repro_child_active_sector') || 'Geral',
+  activeSectorId: localStorage.getItem('repro_active_sector') || '87',
+  childActiveSector: localStorage.getItem('repro_child_active_sector') || SECTOR_NAMES['87'],
   updateActiveSector: (sector: string, addToast) => {
-    const sub = subsectors[sector] || 'Geral';
+    const sub = SECTOR_NAMES[sector] || 'Setor ' + sector;
     localStorage.setItem('repro_active_sector', sector);
     localStorage.setItem('repro_child_active_sector', sub);
     set({ activeSectorId: sector, childActiveSector: sub });
     if (addToast) {
-      addToast(`Foco Setorial alterado para: ${sector.toUpperCase()} (${sub})`, 'var(--color-terminal-accent)');
+      addToast(`Foco Setorial alterado para: SETOR ${sector.toUpperCase()}`, 'var(--color-terminal-accent)');
     }
   },
 }));
+

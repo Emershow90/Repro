@@ -1099,7 +1099,15 @@ export default function App() {
 
         {activeTab === 'followup' && (
           <div className="animate-fade-in">
-            <WeeklyFollowupTab logs={filteredLogs} onAddToast={addToast} />
+            <WeeklyFollowupTab
+              logs={logs}
+              apiUrl={apiUrl}
+              onAddToast={addToast}
+              onRefreshLogs={async () => {
+                const refreshedLogs = await getLogs();
+                setLogs(refreshedLogs);
+              }}
+            />
           </div>
         )}
 

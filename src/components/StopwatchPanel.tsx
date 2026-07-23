@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { AppTimerState } from '../types';
+import { useSectorStore, VALID_SECTORS } from '../stores/sectorStore';
 
 interface StopwatchPanelProps {
   timerState: AppTimerState;
@@ -32,6 +33,8 @@ export default function StopwatchPanel({
 }: StopwatchPanelProps) {
   const [inpVol, setInpVol] = useState(timerState.rascunhoVol || '');
   const [selectedIndirectAct, setSelectedIndirectAct] = useState('Treinamentos / formações');
+
+  const { activeSectorId, updateActiveSector } = useSectorStore();
 
   useEffect(() => {
     if (timerState.rascunhoVol) setInpVol(timerState.rascunhoVol);
@@ -95,7 +98,7 @@ export default function StopwatchPanel({
           </h2>
           <div>
             <label className="text-[0.55rem] uppercase tracking-widest text-terminal-text opacity-40 block mb-1">
-              Link de Integração (API URL)
+              Link de Integração (API URL - Aba: Controle de horas - Repro)
             </label>
             <input
               type="text"
@@ -105,7 +108,7 @@ export default function StopwatchPanel({
               placeholder="Colar link da sua planilha..."
             />
             <p className="text-[0.45rem] text-terminal-text opacity-30 leading-normal mt-1">
-              Memorizado localmente no browser para envio automático.
+              Sincronização em tempo real com a aba 'Controle de horas - Repro'.
             </p>
           </div>
         </div>
@@ -114,7 +117,7 @@ export default function StopwatchPanel({
       {/* CRONÔMETRO DE ATIVIDADE */}
       <section className="border-panel p-6 rounded-sm flex flex-col justify-between">
         <div>
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex justify-between items-center mb-3">
             <h2 className="text-xs font-bold text-white uppercase tracking-widest opacity-60">
               [3. REGISTO DE ATIVIDADE]
             </h2>
@@ -128,11 +131,39 @@ export default function StopwatchPanel({
               </span>
             )}
           </div>
+
+          {/* SELEÇÃO DO SETOR (87, 88, 89, 90) */}
+          <div className="mb-4 bg-terminal-bg/60 p-3 border border-terminal-border/50 rounded-sm">
+            <div className="flex justify-between items-center mb-1.5">
+              <label className="text-[0.55rem] uppercase tracking-widest text-terminal-accent font-bold">
+                Setor de Operação (Controle Repro)
+              </label>
+              <span className="text-[0.5rem] font-mono text-white/60">
+                Ativo: Setor {activeSectorId}
+              </span>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {VALID_SECTORS.map((sec) => (
+                <button
+                  key={sec}
+                  type="button"
+                  onClick={() => updateActiveSector(sec)}
+                  className={`py-1.5 text-xs font-bold font-mono uppercase rounded-sm border transition-all cursor-pointer ${
+                    activeSectorId === sec
+                      ? 'bg-terminal-accent text-terminal-bg border-terminal-accent font-black shadow-sm'
+                      : 'bg-terminal-panel/30 border-terminal-border/60 text-terminal-text hover:border-terminal-accent/50 hover:text-white'
+                  }`}
+                >
+                  Setor {sec}
+                </button>
+              ))}
+            </div>
+          </div>
           
           <div className="space-y-4">
             <div>
               <p className="text-[0.55rem] uppercase tracking-widest text-terminal-text opacity-40 block mb-2">
-                Atividades Diretas (Produção)
+                Atividades Diretas (Produção - Setor {activeSectorId})
               </p>
               <div className="grid grid-cols-3 gap-2">
                 <button
@@ -220,11 +251,16 @@ export default function StopwatchPanel({
               </p>
             )}
 
+            <div className="bg-terminal-bg/70 p-2 border border-terminal-border/40 rounded-sm flex justify-between items-center text-xs">
+              <span className="text-terminal-text opacity-60 text-[0.6rem] uppercase tracking-wider">Setor do Registo:</span>
+              <span className="text-terminal-accent font-mono font-bold">SETOR {activeSectorId}</span>
+            </div>
+
             {!isIndireta ? (
               <div className="flex gap-4">
                 <div className="flex-1">
                   <label className="text-[0.55rem] uppercase tracking-widest text-terminal-text opacity-40 block mb-0.5">
-                    QTD Volumes
+                    QTD Volumes (Endereços)
                   </label>
                   <input
                     type="number"
@@ -232,7 +268,6 @@ export default function StopwatchPanel({
                     onChange={(e) => {
                       const val = e.target.value;
                       setInpVol(val);
-                      
                     }}
                     className="w-full bg-transparent border-b border-terminal-border text-terminal-accent text-sm font-bold focus:outline-none focus:border-terminal-accent py-0.5 text-center"
                     placeholder="0"
