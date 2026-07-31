@@ -670,12 +670,16 @@ export default function App() {
   };
 
   // API URL update handler
-  const handleApiUrlChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value.trim();
+  const handleApiUrlChange = (valOrEvent: string | ChangeEvent<HTMLInputElement>) => {
+    const val = typeof valOrEvent === 'string' ? valOrEvent.trim() : valOrEvent.target.value.trim();
     setApiUrl(val);
     localStorage.setItem('repro_sheets_api_url', val);
-    addToast("URL de ligacao guardada localmente.", 'var(--color-success)');
-    setTimeout(() => sincronizarFila(true), 150);
+    if (val) {
+      addToast("URL de ligação guardada localmente.", 'var(--color-success)');
+      setTimeout(() => sincronizarFila(true), 150);
+    } else {
+      addToast("URL da planilha removida.", 'var(--color-warning)');
+    }
   };
 
   // Computed counts for visual status indicators

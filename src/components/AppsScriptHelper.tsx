@@ -9,46 +9,169 @@ import { Clipboard, Check } from 'lucide-react';
 export default function AppsScriptHelper() {
   const [copied, setCopied] = useState(false);
 
-    var codeSnippet = `// Google Apps Script para o Terminal REPRO
-// Colar no Editor de Scripts da Planilha Google (Extensions > Apps Script)
+    var codeSnippet = `// Google Apps Script para o Terminal REPRO (Aba: Controle de horas - Repro)
+// Colar no Editor de Scripts da Planilha Google (Extensões > Apps Script)
 
 function doPost(e) {
   const SHEET_NAME = "Controle de horas - Repro";
-  const ss = SpreadsheetApp.openById(
-    "1dm1FJTjbjqIGo4nCLz2odAwbhDZ6eM5yzMLbPXl3N4c"
-  );
-  const sheet = ss.getSheetByName(SHEET_NAME);
-  const dados = JSON.parse(e.postData.contents);
-  const linha = sheet.getLastRow() + 1;
-  sheet.getRange(linha,1,1,8).setValues([[
-      dados.setor,
-      dados.data,
-      dados.semana,
-      dados.semanaAno,
-      dados.atividade,
-      dados.colaborador,
-      dados.qtdEnderecos,
-      dados.horas
-  ]]);
-  return ContentService
-      .createTextOutput(JSON.stringify({
-          sucesso:true,
-          linha:linha
-      }))
+  const SPREADSHEET_ID = "1dm1FJTjbjqIGo4nCLz2odAwbhDZ6eM5yzMLbPXl3N4c";
+  
+  const resposta = (sucesso, dados, statusCode = 200) => {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: sucesso ? "sucesso" : "erro", ...dados }))
       .setMimeType(ContentService.MimeType.JSON);
+  };
+
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return resposta(false, { erro: "Payload vazio ou inválido" }, 400);
+    }
+
+    let dados;
+    try {
+      dados = JSON.parse(e.postData.contents);
+    } catch (err) {
+      return resposta(false, { erro: "JSON malformado" }, 400);
+    }
+
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+
+    try {
+      const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+      const sheet = ss.getSheetByName(SHEET_NAME) || ss.getActiveSheet();
+      
+      const vph = dados.horas > 0 ? (dados.qtdEnderecos / dados.horas) : 0;
+      const novoSetor = String(dados.setor || "87").trim();
+      const novaData = String(dados.data || "").trim();
+      const novoColab = String(dados.colaborador || "OPERADOR").toUpperCase().trim();
+      const novaAtiv = String(dados.atividade || "Repro").trim();
+
+      // Verificar registros existentes para evitar duplicidade
+      const lastRow = sheet.getLastRow();
+      let linhaAlvo = lastRow + 1;
+      let modo = "inserido";
+
+      if (lastRow > 1) {
+        const dataValues = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+        for (let i = 0; i < dataValues.length; i++) {
+          const rSetor = String(dataValues[i][0] || "").trim();
+          const rDataRaw = dataValues[i][1];
+          const rDataStr = rDataRaw instanceof Date ? rDataRaw.toISOString() : String(rDataRaw || "").trim();
+          const rAtiv = String(dataValues[i][4] || "").trim();
+          const rColab = String(dataValues[i][5] || "").toUpperCase().trim();
+
+          // Se encontrar mesmo setor, colaborador, data e atividade -> atualiza em vez de duplicar
+          if (
+            rSetor === novoSetor &&
+            rColab === novoColab &&
+            rAtiv.toLowerCase() === novaAtiv.toLowerCase() &&
+            (rDataStr === novaData || (rDataRaw instanceof Date && novaData.includes(rDataRaw.toLocaleDateString('pt-BR'))))
+          ) {
+            linhaAlvo = i + 2; // +2 compensa cabeçalho (1-based)
+            modo = "atualizado";
+            break;
+          }
+        }
+      }
+
+      sheet.getRange(linhaAlvo, 1, 1, 9).setValues([[
+        dados.setor || "87",
+        dados.data || new Date().toISOString(),
+        dados.semana || 1,
+        dados.semanaAno || new Date().getFullYear(),
+        dados.atividade || "Repro",
+        dados.colaborador || "OPERADOR",
+        dados.qtdEnderecos || 0,
+        dados.horas || 0,
+        vph
+      ]]);
+
+      return resposta(true, { operacao: modo, linha: linhaAlvo });
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    console.error("Erro doPost:", err);
+    return resposta(false, { erro: err.toString() }, 500);
+  }
 }
 
 function doGet(e) {
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheetByName('Controle de horas - Repro') || ss.getActiveSheet();
+    var SHEET_NAME = "Controle de horas - Repro";
+    var SPREADSHEET_ID = "1dm1FJTjbjqIGo4nCLz2odAwbhDZ6eM5yzMLbPXl3N4c";
+    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    var sheet = ss.getSheetByName(SHEET_NAME) || ss.getActiveSheet();
+    
+    // --- INSERT VIA GET (Fallback for CORS issues) ---
+    if (e.parameter.action === 'insert') {
+      var lock = LockService.getScriptLock();
+      lock.waitLock(10000);
+      try {
+        var payload = e.parameter.payload;
+        var dados = JSON.parse(payload);
+        
+        var vph = dados.horas > 0 ? (dados.qtdEnderecos / dados.horas) : 0;
+        var novoSetor = String(dados.setor || "87").trim();
+        var novaData = String(dados.data || "").trim();
+        var novoColab = String(dados.colaborador || "OPERADOR").toUpperCase().trim();
+        var novaAtiv = String(dados.atividade || "Repro").trim();
+        
+        var lastRow = sheet.getLastRow();
+        var linhaAlvo = lastRow + 1;
+        var modo = "inserido";
+        
+        if (lastRow > 1) {
+          var dataValues = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+          for (var i = 0; i < dataValues.length; i++) {
+            var rSetor = String(dataValues[i][0] || "").trim();
+            var rDataRaw = dataValues[i][1];
+            var rDataStr = rDataRaw instanceof Date ? rDataRaw.toISOString() : String(rDataRaw || "").trim();
+            var rAtiv = String(dataValues[i][4] || "").trim();
+            var rColab = String(dataValues[i][5] || "").toUpperCase().trim();
+            
+            if (rSetor === novoSetor && rColab === novoColab && rAtiv.toLowerCase() === novaAtiv.toLowerCase() && (rDataStr === novaData || (rDataRaw instanceof Date && novaData.includes(rDataRaw.toLocaleDateString('pt-BR'))))) {
+              linhaAlvo = i + 2;
+              modo = "atualizado";
+              break;
+            }
+          }
+        }
+        
+        sheet.getRange(linhaAlvo, 1, 1, 9).setValues([[
+          dados.setor || "87",
+          dados.data || new Date().toISOString(),
+          dados.semana || 1,
+          dados.semanaAno || new Date().getFullYear(),
+          dados.atividade || "Repro",
+          dados.colaborador || "OPERADOR",
+          dados.qtdEnderecos || 0,
+          dados.horas || 0,
+          vph
+        ]]);
+        
+        var jsonInsert = JSON.stringify({ status: "sucesso", operacao: modo, linha: linhaAlvo });
+        if (e.parameter.callback) {
+          return ContentService.createTextOutput(e.parameter.callback + "(" + jsonInsert + ")").setMimeType(ContentService.MimeType.JAVASCRIPT);
+        }
+        return ContentService.createTextOutput(jsonInsert).setMimeType(ContentService.MimeType.JSON);
+      } finally {
+        lock.releaseLock();
+      }
+    }
+    // --- END INSERT VIA GET ---
+
     var rows = sheet.getDataRange().getValues();
     if (rows.length <= 1) {
-      return ContentService.createTextOutput(JSON.stringify([]))
-                           .setMimeType(ContentService.MimeType.JSON);
+      var emptyJson = JSON.stringify({ status: "sucesso", dados: [] });
+      if (e.parameter.callback) {
+         return ContentService.createTextOutput(e.parameter.callback + "(" + emptyJson + ")").setMimeType(ContentService.MimeType.JAVASCRIPT);
+      }
+      return ContentService.createTextOutput(emptyJson).setMimeType(ContentService.MimeType.JSON);
     }
     
-    var headers = rows[0].map(function(h) { return h.toString().toLowerCase().trim(); });
+    var headers = rows[0].map(function(h) { return h.toString().trim(); });
     var dataArray = [];
     
     for (var i = 1; i < rows.length; i++) {
@@ -56,17 +179,22 @@ function doGet(e) {
       var obj = {};
       for (var j = 0; j < headers.length; j++) {
         var key = headers[j];
-        var cellVal = row[j];
-        obj[key] = cellVal;
+        obj[key] = row[j];
       }
       dataArray.push(obj);
     }
     
-    return ContentService.createTextOutput(JSON.stringify(dataArray))
-                         .setMimeType(ContentService.MimeType.JSON);
+    var jsonResult = JSON.stringify({ status: "sucesso", dados: dataArray });
+    if (e.parameter.callback) {
+      return ContentService.createTextOutput(e.parameter.callback + "(" + jsonResult + ")").setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+    return ContentService.createTextOutput(jsonResult).setMimeType(ContentService.MimeType.JSON);
   } catch(erro) {
-    return ContentService.createTextOutput(JSON.stringify({ status: "erro", mensagem: erro.toString() }))
-                         .setMimeType(ContentService.MimeType.JSON);
+    var errJson = JSON.stringify({ status: "erro", mensagem: erro.toString() });
+    if (e.parameter.callback) {
+      return ContentService.createTextOutput(e.parameter.callback + "(" + errJson + ")").setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+    return ContentService.createTextOutput(errJson).setMimeType(ContentService.MimeType.JSON);
   }
 }`;
 
@@ -102,10 +230,13 @@ function doGet(e) {
       
       <p className="text-[0.55rem] text-terminal-text opacity-40 leading-relaxed">
         Siga estes passos:<br />
-        1. Abra a sua Planilha Google.<br />
-        2. No menu superior, clique em <strong className="text-white">Extensões &gt; Apps Script</strong>.<br />
-        3. Cole o código copiado abaixo, salve e faça o deploy como <strong className="text-white">Web App</strong> (Acesso: Qualquer Pessoa).<br />
-        4. Copie a URL gerada e cole no campo de configuração acima.
+        1. Abra a sua Planilha Google e clique em <strong className="text-white">Extensões &gt; Apps Script</strong>.<br />
+        2. Cole o código copiado abaixo e clique em <strong className="text-white">Salvar</strong>.<br />
+        3. No topo direito, clique em <strong className="text-white">Implantar &gt; Nova implantação</strong>.<br />
+        4. Selecione <strong className="text-white">App da Web (Web App)</strong>.<br />
+        5. <strong className="text-warning text-yellow-400">CRÍTICO:</strong> Em "Quem tem acesso", escolha exatamente <strong className="text-white">"Qualquer pessoa" (Anyone)</strong>.<br />
+        <span className="opacity-70 italic">(Se não escolher "Qualquer pessoa", o sistema será bloqueado pela tela de login do Google).</span><br />
+        6. Copie a URL gerada e cole no campo acima.
       </p>
 
       <div className="bg-terminal-bg/50 border border-terminal-border/30 p-3 rounded-sm overflow-x-auto max-h-40 scrollbar-thin">

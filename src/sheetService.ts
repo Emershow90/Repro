@@ -9,6 +9,47 @@ import { auth } from './lib/firebase';
 import { saveLogsDirectly, fetchLogsDirectly } from './utils/supabase/client';
 
 /**
+ * JSONP Fetch helper for bypassing CORS and Auth redirects on Google Apps Script
+ */
+function jsonpFetch(url: string, timeoutMs = 15000): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const callbackName = 'jsonpCallback_' + Math.round(1000000 * Math.random());
+    let cleanupDone = false;
+    
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error('JSONP timeout: Planilha demorou muito para responder'));
+    }, timeoutMs);
+
+    (window as any)[callbackName] = function(data: any) {
+      cleanup();
+      resolve(data);
+    };
+
+    const script = document.createElement('script');
+    const separator = url.includes('?') ? '&' : '?';
+    script.src = url + separator + 'callback=' + callbackName;
+    
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('Falha no JSONP: Verifique acesso e conectividade. O script bloqueou ou não está disponível.'));
+    };
+
+    function cleanup() {
+      if (cleanupDone) return;
+      cleanupDone = true;
+      clearTimeout(timeoutId);
+      delete (window as any)[callbackName];
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    }
+
+    document.head.appendChild(script);
+  });
+}
+
+/**
  * Posts a log to Google Apps Script Web App (Aba: Controle de horas - Repro)
  */
 export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<boolean> {
@@ -27,7 +68,7 @@ export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<bool
     tipo: log.tipo || 'direta'
   };
 
-  // Try Server-side proxy first to bypass browser CORS constraints
+  // Tier 1: Try Server-side proxy first if backend API is available
   try {
     const proxyRes = await fetch('/api/sheets/proxy', {
       method: 'POST',
@@ -40,10 +81,10 @@ export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<bool
       if (result.status === 'success') return true;
     }
   } catch {
-    // Ignore server proxy errors and try direct browser fetch
+    // Ignore server proxy errors and try direct client fetch
   }
 
-  // Fallback: Direct client browser fetch
+  // Tier 2: Direct browser fetch with standard CORS
   try {
     const response = await fetch(apiUrl, {
       method: 'POST',
@@ -52,9 +93,35 @@ export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<bool
       redirect: 'follow',
     });
 
-    return response.ok || response.type === 'opaque';
+    if (response.ok || response.type === 'opaque') {
+      return true;
+    }
   } catch (err) {
-    console.warn('Google Sheets direct POST error:', err);
+    console.warn('Direct Google Sheets POST error, trying JSONP fallback:', err);
+  }
+
+  // Tier 3: JSONP Fallback via GET (Action: insert) to bypass Google Workspace CORS / Auth redirects
+  try {
+    const insertUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'action=insert&payload=' + encodeURIComponent(JSON.stringify(payload));
+    const result = await jsonpFetch(insertUrl);
+    if (result && result.status === 'sucesso') {
+      return true;
+    }
+  } catch (err) {
+    console.warn('Google Sheets JSONP Insert error:', err);
+  }
+
+  // Tier 4: Direct browser fetch with mode: 'no-cors'
+  try {
+    await fetch(apiUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    });
+    return true; // Assume success for opaque response if JSONP failed
+  } catch (err) {
+    console.warn('Google Sheets no-cors POST error:', err);
     return false;
   }
 }
@@ -69,7 +136,7 @@ export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
 
   let data: unknown = null;
 
-  // Try Server-side proxy first to prevent browser CORS blocks on Google Apps Script redirects
+  // Tier 1: Try Server-side proxy (/api/sheets/proxy)
   try {
     const proxyUrl = `/api/sheets/proxy?apiUrl=${encodeURIComponent(apiUrl)}`;
     const proxyRes = await fetch(proxyUrl, { method: 'GET' });
@@ -77,26 +144,72 @@ export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
       data = await proxyRes.json();
     }
   } catch {
-    // Fallback to direct fetch
+    // Fallback to direct client fetch
   }
 
-  // Fallback if proxy failed
+  // Tier 2: Direct browser fetch
   if (!data) {
-    const response = await fetch(apiUrl, {
-      method: 'GET',
-      redirect: 'follow'
-    });
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        redirect: 'follow'
+      });
 
-    if (!response.ok) {
-      throw new Error(`Erro HTTP ao conectar à planilha: ${response.status} ${response.statusText}`);
+      if (response.ok) {
+        data = await response.json();
+      }
+    } catch {
+      // Fallback to JSONP
     }
-
-    data = await response.json();
   }
 
-  if (!data) return [];
+  // Tier 3: JSONP Fallback to bypass Google Workspace Auth redirects/CORS
+  if (!data) {
+    try {
+      data = await jsonpFetch(apiUrl);
+    } catch (err) {
+      console.warn('JSONP fetch failed, trying public proxies:', err);
+    }
+  }
 
-  const dataArray = Array.isArray(data) ? data : (typeof data === 'object' && data !== null && 'data' in data && Array.isArray((data as Record<string, unknown>).data)) ? (data as Record<string, unknown>).data as unknown[] : [];
+  // Tier 4: Public CORS proxy fallback for static hosts (e.g., Vercel, GH Pages)
+  if (!data) {
+    const corsProxies = [
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`,
+      `https://corsproxy.io/?${encodeURIComponent(apiUrl)}`
+    ];
+
+    for (const proxyUrl of corsProxies) {
+      try {
+        const res = await fetch(proxyUrl, { method: 'GET' });
+        if (res.ok) {
+          const text = await res.text();
+          try {
+            data = JSON.parse(text);
+            if (data) break;
+          } catch {
+            // Invalid JSON
+          }
+        }
+      } catch {
+        // Next proxy
+      }
+    }
+  }
+
+  if (!data) {
+    throw new Error(
+      'Não foi possível conectar à planilha Google. Verifique se o link está correto e se o Google Apps Script foi implantado com acesso "Qualquer pessoa" (Anyone).'
+    );
+  }
+
+  const dataArray = Array.isArray(data)
+    ? data
+    : (data && typeof data === 'object' && 'dados' in data && Array.isArray((data as Record<string, unknown>).dados))
+    ? (data as Record<string, unknown>).dados as unknown[]
+    : (data && typeof data === 'object' && 'data' in data && Array.isArray((data as Record<string, unknown>).data))
+    ? (data as Record<string, unknown>).data as unknown[]
+    : [];
 
   if (!Array.isArray(dataArray)) {
     if (data && typeof data === 'object' && 'status' in data && (data as Record<string, unknown>).status === 'erro') {
@@ -112,25 +225,70 @@ export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
     return parseFloat(String(v).replace(',', '.')) || 0;
   };
 
+  const formatDateStr = (raw: unknown): string => {
+    if (!raw) return new Date().toLocaleDateString('pt-PT');
+    const str = String(raw).trim();
+    if (str.includes('T')) {
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) {
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const year = d.getUTCFullYear();
+        return `${day}/${month}/${year}`;
+      }
+    }
+    return str;
+  };
+
   const logs: Log[] = dataArray.map((row: unknown, idx: number) => {
+    const r = (row && typeof row === 'object' ? row : {}) as Record<string, unknown>;
     const norm: Record<string, unknown> = {};
-    if (row && typeof row === 'object') {
-      for (const k of Object.keys(row as Record<string, unknown>)) {
-        norm[k.toLowerCase().trim()] = (row as Record<string, unknown>)[k];
+    for (const k of Object.keys(r)) {
+      norm[k.toLowerCase().trim()] = r[k];
+    }
+
+    const rawSetor = String(r['Setor'] || r['setor'] || norm['setor'] || '87').trim();
+    const rawData = formatDateStr(r['data'] || norm['data']);
+
+    // Extract week number carefully (avoiding year override from lowercase 'semana')
+    let rawSemana = 0;
+    if (typeof r['Semana'] === 'number' && r['Semana'] > 0 && r['Semana'] <= 53) {
+      rawSemana = r['Semana'];
+    } else if (typeof r['semana'] === 'number' && r['semana'] > 0 && r['semana'] <= 53) {
+      rawSemana = r['semana'];
+    } else {
+      const semFromNorm = parseInt(String(norm['semana'] || '0'), 10);
+      if (semFromNorm > 0 && semFromNorm <= 53) {
+        rawSemana = semFromNorm;
+      } else if (rawData) {
+        // Fallback: derive week from date
+        const parts = rawData.split('/');
+        if (parts.length === 3) {
+          const d = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+          if (!isNaN(d.getTime())) {
+            const target = new Date(d.valueOf());
+            const dayNr = (d.getDay() + 6) % 7;
+            target.setDate(target.getDate() - dayNr + 3);
+            const firstThursday = target.valueOf();
+            target.setMonth(0, 1);
+            if (target.getDay() !== 4) {
+              target.setMonth(0, 1 + ((4 - target.getDay() + 7) % 7));
+            }
+            rawSemana = 1 + Math.round((firstThursday - target.valueOf()) / 604800000);
+          }
+        }
       }
     }
 
-    const rawSetor = String(norm['setor'] || '87').trim();
-    const rawData = String(norm['data'] || '').trim();
-    const rawSemana = parseInt(String(norm['semana'] || '0'), 10);
-    const rawAtividade = String(norm['o que foi feito no repro'] || norm['atividade'] || 'Repro').trim();
-    const rawColaborador = String(norm['colaborador'] || '').toUpperCase().trim();
-    const rawVolumes = parsePtFloat(norm['qtd endereços'] || norm['qtd enderecos'] || norm['volumes'] || norm['qtd'] || 0);
-    const rawHoras = parsePtFloat(norm['horas usadas'] || norm['horas'] || norm['tempo'] || 0);
+    const rawAtividade = String(r['atividade'] || norm['o que foi feito no repro'] || norm['atividade'] || 'Repro').trim();
+    const rawColaborador = String(r['colaborador'] || norm['colaborador'] || '').toUpperCase().trim();
+    const rawVolumes = parsePtFloat(r['enderecos'] || r['qtdEnderecos'] || norm['qtd endereços'] || norm['qtd enderecos'] || norm['volumes'] || norm['qtd'] || 0);
+    const rawHoras = parsePtFloat(r['horas'] || norm['horas usadas'] || norm['horas'] || norm['tempo'] || 0);
 
     const isIndireta = ['treinamentos', 'reuniões', 'reunioes', 'inventário', 'inventario', 'gestão de estoque', 'gestao de estoque', 'eid', 'missões de setor', 'missoes de setor'].some(term => rawAtividade.toLowerCase().includes(term));
 
-    const vph = rawHoras > 0 ? (rawVolumes / rawHoras).toFixed(2) : '0.00';
+    const rawEph = parsePtFloat(r['eph'] || norm['eph'] || norm['vph'] || 0);
+    const vph = rawEph > 0 ? rawEph.toFixed(2) : (rawHoras > 0 ? (rawVolumes / rawHoras).toFixed(2) : '0.00');
 
     return {
       id: norm['id'] ? Number(norm['id']) : Date.now() + idx,

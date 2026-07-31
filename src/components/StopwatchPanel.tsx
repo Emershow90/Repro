@@ -97,18 +97,42 @@ export default function StopwatchPanel({
             [2. LIGAÇÃO À PLANILHA]
           </h2>
           <div>
-            <label className="text-[0.55rem] uppercase tracking-widest text-terminal-text opacity-40 block mb-1">
-              Link de Integração (API URL - Aba: Controle de horas - Repro)
-            </label>
-            <input
-              type="text"
-              value={apiUrl}
-              onChange={(e) => onApiUrlChange(e.target.value)}
-              className="w-full bg-terminal-bg border border-terminal-border text-terminal-accent text-xs font-mono focus:outline-none focus:border-terminal-accent p-2 rounded-sm"
-              placeholder="Colar link da sua planilha..."
-            />
-            <p className="text-[0.45rem] text-terminal-text opacity-30 leading-normal mt-1">
-              Sincronização em tempo real com a aba 'Controle de horas - Repro'.
+            <div className="flex justify-between items-center mb-1.5">
+              <label className="text-[0.55rem] uppercase tracking-widest text-terminal-text opacity-60 font-mono">
+                Link da API (Aba: Controle de horas - Repro)
+              </label>
+              {apiUrl ? (
+                <span className="text-[0.5rem] text-terminal-accent bg-terminal-accent/10 border border-terminal-accent/30 px-1.5 py-0.5 rounded-sm font-mono uppercase font-bold flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-terminal-accent animate-pulse" />
+                  <span>Conectado</span>
+                </span>
+              ) : (
+                <span className="text-[0.5rem] text-warning bg-warning/10 border border-warning/30 px-1.5 py-0.5 rounded-sm font-mono uppercase font-bold">
+                  Não Configurado
+                </span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={apiUrl}
+                onChange={(e) => onApiUrlChange(e.target.value)}
+                className="flex-1 bg-terminal-bg border border-terminal-border text-terminal-accent text-xs font-mono focus:outline-none focus:border-terminal-accent p-2 rounded-sm"
+                placeholder="Cole a URL do seu Google Apps Script..."
+              />
+              {apiUrl && (
+                <button
+                  type="button"
+                  onClick={() => onApiUrlChange('')}
+                  title="Limpar Link"
+                  className="px-2.5 py-1 text-[0.6rem] font-bold uppercase font-mono border border-terminal-border text-terminal-text hover:text-danger hover:border-danger/60 rounded-sm cursor-pointer transition-colors"
+                >
+                  Limpar
+                </button>
+              )}
+            </div>
+            <p className="text-[0.5rem] text-terminal-text opacity-50 font-mono mt-1.5">
+              Integração ativa com a aba 'Controle de horas - Repro' do Google Sheets.
             </p>
           </div>
         </div>
