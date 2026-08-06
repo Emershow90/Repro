@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { AppTimerState } from '../types';
 import { useSectorStore, VALID_SECTORS } from '../stores/sectorStore';
+import { validateGoogleSheetUrl, pingGoogleSheetsEndpoint } from '../sheetService';
 
 interface StopwatchPanelProps {
   timerState: AppTimerState;
@@ -96,45 +97,71 @@ export default function StopwatchPanel({
           <h2 className="text-xs font-bold text-white uppercase tracking-widest border-b border-terminal-border/40 pb-2 opacity-60 mb-4 mt-6">
             [2. LIGAÇÃO À PLANILHA]
           </h2>
-          <div>
-            <div className="flex justify-between items-center mb-1.5">
-              <label className="text-[0.55rem] uppercase tracking-widest text-terminal-text opacity-60 font-mono">
-                Link da API (Aba: Controle de horas - Repro)
-              </label>
-              {apiUrl ? (
-                <span className="text-[0.5rem] text-terminal-accent bg-terminal-accent/10 border border-terminal-accent/30 px-1.5 py-0.5 rounded-sm font-mono uppercase font-bold flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-terminal-accent animate-pulse" />
-                  <span>Conectado</span>
-                </span>
-              ) : (
-                <span className="text-[0.5rem] text-warning bg-warning/10 border border-warning/30 px-1.5 py-0.5 rounded-sm font-mono uppercase font-bold">
-                  Não Configurado
-                </span>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={apiUrl}
-                onChange={(e) => onApiUrlChange(e.target.value)}
-                className="flex-1 bg-terminal-bg border border-terminal-border text-terminal-accent text-xs font-mono focus:outline-none focus:border-terminal-accent p-2 rounded-sm"
-                placeholder="Cole a URL do seu Google Apps Script..."
-              />
-              {apiUrl && (
-                <button
-                  type="button"
-                  onClick={() => onApiUrlChange('')}
-                  title="Limpar Link"
-                  className="px-2.5 py-1 text-[0.6rem] font-bold uppercase font-mono border border-terminal-border text-terminal-text hover:text-danger hover:border-danger/60 rounded-sm cursor-pointer transition-colors"
-                >
-                  Limpar
-                </button>
-              )}
-            </div>
-            <p className="text-[0.5rem] text-terminal-text opacity-50 font-mono mt-1.5">
-              Integração ativa com a aba 'Controle de horas - Repro' do Google Sheets.
-            </p>
-          </div>
+          {(() => {
+            const urlVal = validateGoogleSheetUrl(apiUrl);
+            return (
+              <div>
+                <div className="flex justify-between items-center mb-1.5">
+                  <label className="text-[0.55rem] uppercase tracking-widest text-terminal-text opacity-60 font-mono">
+                    Link da Planilha ou API Google Sheets
+                  </label>
+                  {!apiUrl ? (
+                    <span className="text-[0.5rem] text-warning bg-warning/10 border border-warning/30 px-1.5 py-0.5 rounded-sm font-mono uppercase font-bold">
+                      Não Configurado
+                    </span>
+                  ) : !urlVal.isValid ? (
+                    <span 
+                      onClick={() => pingGoogleSheetsEndpoint(apiUrl)}
+                      className="text-[0.5rem] text-danger bg-danger/10 border border-danger/40 px-1.5 py-0.5 rounded-sm font-mono uppercase font-bold flex items-center gap-1 cursor-pointer hover:bg-danger/20"
+                      title="Clique para testar e ver os logs de conexão no console"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-danger animate-ping" />
+                      <span>URL / ID Inválido</span>
+                    </span>
+                  ) : (
+                    <span 
+                      onClick={() => pingGoogleSheetsEndpoint(apiUrl)}
+                      className="text-[0.5rem] text-terminal-accent bg-terminal-accent/10 border border-terminal-accent/30 px-1.5 py-0.5 rounded-sm font-mono uppercase font-bold flex items-center gap-1 cursor-pointer hover:bg-terminal-accent/20"
+                      title="Clique para testar conectividade e ver logs detalhados no console"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-terminal-accent animate-pulse" />
+                      <span>Conectado (Ping Test)</span>
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={apiUrl}
+                    onChange={(e) => onApiUrlChange(e.target.value)}
+                    className={`flex-1 bg-terminal-bg border ${!apiUrl ? 'border-terminal-border' : !urlVal.isValid ? 'border-danger/80 text-danger' : 'border-terminal-accent text-terminal-accent'} text-xs font-mono focus:outline-none p-2 rounded-sm transition-colors`}
+                    placeholder="Cole a URL do Google Apps Script ou o Link de Publicação da Planilha (pubhtml)..."
+                  />
+                  {apiUrl && (
+                    <button
+                      type="button"
+                      onClick={() => onApiUrlChange('')}
+                      title="Limpar Link"
+                      className="px-2.5 py-1 text-[0.6rem] font-bold uppercase font-mono border border-terminal-border text-terminal-text hover:text-danger hover:border-danger/60 rounded-sm cursor-pointer transition-colors"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
+                
+                {apiUrl.length > 0 && !urlVal.isValid && (
+                  <div className="mt-2 p-2 bg-danger/10 border border-danger/40 text-danger text-[0.6rem] font-mono rounded-sm flex items-center gap-1.5 animate-fade-in">
+                    <span className="font-bold text-xs">⚠️ FORMATO INVÁLIDO:</span>
+                    <span>{urlVal.message}</span>
+                  </div>
+                )}
+
+                <p className="text-[0.5rem] text-terminal-text opacity-50 font-mono mt-1.5">
+                  Suporta URL do Web App Google Apps Script (/macros/s/ID/exec) ou Link da Planilha Publicada (/spreadsheets/d/ID).
+                </p>
+              </div>
+            );
+          })()}
         </div>
       </section>
 

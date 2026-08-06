@@ -28,31 +28,28 @@ import {
   ListOrdered,
   RefreshCw,
   Link as LinkIcon,
+  ExternalLink,
   FileSpreadsheet,
   FileText,
   ChevronDown
 } from 'lucide-react';
 
-function obterSemanaDoAno(date: Date): number {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-}
+import { getWeekNumber } from '../utils/dateUtils';
 
 interface WeeklyFollowupTabProps {
   logs: Log[];
   apiUrl?: string;
   onAddToast: (msg: string, color?: string) => void;
   onRefreshLogs?: () => void;
+  userUid?: string;
 }
 
 export default function WeeklyFollowupTab({
   logs,
   apiUrl = '',
   onAddToast,
-  onRefreshLogs
+  onRefreshLogs,
+  userUid
 }: WeeklyFollowupTabProps) {
   const { activeSectorId, updateActiveSector } = useSectorStore();
 
@@ -62,7 +59,7 @@ export default function WeeklyFollowupTab({
   // Selected week state
   const [selectedWeek, setSelectedWeek] = useState<number>(() => {
     if (weeksList.length > 0) return weeksList[0];
-    return obterSemanaDoAno(new Date());
+    return getWeekNumber(new Date());
   });
 
   // Unsynced count calculation
@@ -116,7 +113,7 @@ export default function WeeklyFollowupTab({
     onAddToast('A sincronizar registos com a aba Controle de horas - Repro...', 'var(--color-info)');
 
     try {
-      const res = await syncOfflineQueue(apiUrl);
+      const res = await syncOfflineQueue(apiUrl, undefined, userUid);
       if (onRefreshLogs) onRefreshLogs();
 
       if (res.successCount > 0) {
@@ -143,7 +140,7 @@ export default function WeeklyFollowupTab({
     onAddToast('A descarregar dados da aba Controle de horas - Repro...', 'var(--color-info)');
 
     try {
-      const cloudLogs = await fetchFromCloud(apiUrl);
+      const cloudLogs = await fetchFromCloud(apiUrl, userUid);
       const localLogs = await getLogs();
       let importedCount = 0;
 
@@ -531,7 +528,7 @@ export default function WeeklyFollowupTab({
                     <option key={wk} value={wk} className="bg-terminal-panel text-white">Semana {wk}</option>
                   ))
                 ) : (
-                  <option value={obterSemanaDoAno(new Date())}>Semana Atual</option>
+                  <option value={getWeekNumber(new Date())}>Semana Atual</option>
                 )}
               </select>
             </div>
@@ -639,6 +636,18 @@ export default function WeeklyFollowupTab({
               <CheckCircle2 size={11} className="text-terminal-accent" />
               <span>{isTestingConn ? 'Testando...' : 'Testar Conexão'}</span>
             </button>
+
+            {apiUrl && (
+              <a
+                href={apiUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 text-[0.55rem] font-bold uppercase tracking-wider bg-terminal-panel border border-terminal-border text-terminal-text/80 hover:text-white hover:border-terminal-accent/60 rounded-sm cursor-pointer transition-all flex items-center gap-1"
+              >
+                <ExternalLink size={11} className="text-terminal-accent" />
+                <span>Abrir Planilha</span>
+              </a>
+            )}
           </div>
         </div>
 

@@ -229,14 +229,14 @@ function doGet(e) {
       </div>
       
       <p className="text-[0.55rem] text-terminal-text opacity-40 leading-relaxed">
-        Siga estes passos:<br />
+        <strong>Opção A: Google Apps Script Web App (Leitura e Escrita Automática):</strong><br />
         1. Abra a sua Planilha Google e clique em <strong className="text-white">Extensões &gt; Apps Script</strong>.<br />
         2. Cole o código copiado abaixo e clique em <strong className="text-white">Salvar</strong>.<br />
-        3. No topo direito, clique em <strong className="text-white">Implantar &gt; Nova implantação</strong>.<br />
-        4. Selecione <strong className="text-white">App da Web (Web App)</strong>.<br />
-        5. <strong className="text-warning text-yellow-400">CRÍTICO:</strong> Em "Quem tem acesso", escolha exatamente <strong className="text-white">"Qualquer pessoa" (Anyone)</strong>.<br />
-        <span className="opacity-70 italic">(Se não escolher "Qualquer pessoa", o sistema será bloqueado pela tela de login do Google).</span><br />
-        6. Copie a URL gerada e cole no campo acima.
+        3. No topo direito, clique em <strong className="text-white">Implantar &gt; Nova implantação &gt; App da Web</strong>.<br />
+        4. <strong className="text-warning text-yellow-400">CRÍTICO:</strong> Em "Quem tem acesso", escolha <strong className="text-white">"Qualquer pessoa" (Anyone)</strong>.<br />
+        5. Copie a URL e cole no campo acima.<br /><br />
+        <strong>Opção B: Link de Planilha Publicada na Web (Suportado para Leitura):</strong><br />
+        • Cole a URL do Google Sheets (ex: <span className="text-terminal-accent opacity-80 font-mono">https://docs.google.com/spreadsheets/d/e/.../pubhtml</span>). O sistema converterá e sincronizará automaticamente.
       </p>
 
       <div className="bg-terminal-bg/50 border border-terminal-border/30 p-3 rounded-sm overflow-x-auto max-h-40 scrollbar-thin">

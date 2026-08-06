@@ -5,12 +5,100 @@
 
 import { Log } from './types';
 import { saveLog, getLogs } from './dbLocal';
-import { auth } from './lib/firebase';
 import { saveLogsDirectly, fetchLogsDirectly } from './utils/supabase/client';
+import { getWeekNumber, parseDateString, getDayOfWeekName } from './utils/dateUtils';
 
 /**
- * JSONP Fetch helper for bypassing CORS and Auth redirects on Google Apps Script
+ * Normalizes any Google Sheets URL (e.g. published web page pubhtml, Apps Script URL, or published CSV)
  */
+export function normalizeSheetUrl(url: string): string {
+  if (!url) return '';
+  let trimmed = url.trim();
+  
+  // If it's a published Google Spreadsheet page (pubhtml or pub)
+  if (trimmed.includes('docs.google.com/spreadsheets/d/e/') || trimmed.includes('/pubhtml')) {
+    let csvUrl = trimmed.replace(/\/pubhtml(\?.*)?$/, '/pub$1');
+    if (csvUrl.includes('?')) {
+      if (!csvUrl.includes('output=csv')) {
+        csvUrl += '&output=csv';
+      }
+    } else {
+      csvUrl += '?output=csv';
+    }
+    return csvUrl;
+  }
+  return trimmed;
+}
+
+/**
+ * Parses CSV text from Google Sheets published CSV into structured objects
+ */
+function parseCSVData(csvText: string): Record<string, unknown>[] {
+  const lines: string[] = [];
+  let currentLine = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i++) {
+    const char = csvText[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      currentLine += char;
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && csvText[i + 1] === '\n') {
+        i++;
+      }
+      if (currentLine.trim().length > 0) {
+        lines.push(currentLine);
+      }
+      currentLine = '';
+    } else {
+      currentLine += char;
+    }
+  }
+  if (currentLine.trim().length > 0) {
+    lines.push(currentLine);
+  }
+
+  if (lines.length <= 1) return [];
+
+  const parseCSVLine = (line: string): string[] => {
+    const result: string[] = [];
+    let cur = '';
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (inQ && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQ = !inQ;
+        }
+      } else if (c === ',' && !inQ) {
+        result.push(cur.trim());
+        cur = '';
+      } else {
+        cur += c;
+      }
+    }
+    result.push(cur.trim());
+    return result;
+  };
+
+  const headers = parseCSVLine(lines[0]).map(h => h.replace(/^"|"$/g, '').trim());
+  const rows: Record<string, unknown>[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCSVLine(lines[i]).map(v => v.replace(/^"|"$/g, '').trim());
+    const rowObj: Record<string, unknown> = {};
+    headers.forEach((header, idx) => {
+      rowObj[header] = values[idx] !== undefined ? values[idx] : '';
+    });
+    rows.push(rowObj);
+  }
+
+  return rows;
+}
 function jsonpFetch(url: string, timeoutMs = 15000): Promise<any> {
   return new Promise((resolve, reject) => {
     const callbackName = 'jsonpCallback_' + Math.round(1000000 * Math.random());
@@ -127,13 +215,14 @@ export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<bool
 }
 
 /**
- * Fetches logs from Google Apps Script Web App (Aba: Controle de horas - Repro)
+ * Fetches logs from Google Apps Script Web App or Published Google Sheet CSV
  */
-export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
-  if (!apiUrl || !apiUrl.startsWith('http')) {
+export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]> {
+  if (!apiUrlInput || !apiUrlInput.startsWith('http')) {
     throw new Error('URL da API do Google Sheets não foi configurada.');
   }
 
+  const apiUrl = normalizeSheetUrl(apiUrlInput);
   let data: unknown = null;
 
   // Tier 1: Try Server-side proxy (/api/sheets/proxy)
@@ -141,7 +230,21 @@ export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
     const proxyUrl = `/api/sheets/proxy?apiUrl=${encodeURIComponent(apiUrl)}`;
     const proxyRes = await fetch(proxyUrl, { method: 'GET' });
     if (proxyRes.ok) {
-      data = await proxyRes.json();
+      const contentType = proxyRes.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await proxyRes.json();
+      } else {
+        const text = await proxyRes.text();
+        if (text.includes(',') && (text.includes('\n') || text.includes('Carimbo') || text.includes('Setor') || text.includes('Colaborador'))) {
+          data = parseCSVData(text);
+        } else {
+          try {
+            data = JSON.parse(text);
+          } catch {
+            // Text is not JSON
+          }
+        }
+      }
     }
   } catch {
     // Fallback to direct client fetch
@@ -156,15 +259,24 @@ export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
       });
 
       if (response.ok) {
-        data = await response.json();
+        const text = await response.text();
+        if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
+          try {
+            data = JSON.parse(text);
+          } catch {
+            // Not valid JSON
+          }
+        } else if (text.includes(',') && (text.includes('\n') || text.includes('Carimbo') || text.includes('Setor') || text.includes('Colaborador'))) {
+          data = parseCSVData(text);
+        }
       }
     } catch {
       // Fallback to JSONP
     }
   }
 
-  // Tier 3: JSONP Fallback to bypass Google Workspace Auth redirects/CORS
-  if (!data) {
+  // Tier 3: JSONP Fallback to bypass Google Workspace Auth redirects/CORS (For Web Apps)
+  if (!data && !apiUrl.includes('output=csv')) {
     try {
       data = await jsonpFetch(apiUrl);
     } catch (err) {
@@ -184,11 +296,16 @@ export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
         const res = await fetch(proxyUrl, { method: 'GET' });
         if (res.ok) {
           const text = await res.text();
-          try {
-            data = JSON.parse(text);
-            if (data) break;
-          } catch {
-            // Invalid JSON
+          if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
+            try {
+              data = JSON.parse(text);
+              if (data) break;
+            } catch {
+              // Invalid JSON
+            }
+          } else if (text.includes(',') && (text.includes('\n') || text.includes('Carimbo') || text.includes('Setor') || text.includes('Colaborador'))) {
+            data = parseCSVData(text);
+            if (data && Array.isArray(data) && data.length > 0) break;
           }
         }
       } catch {
@@ -248,9 +365,9 @@ export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
     }
 
     const rawSetor = String(r['Setor'] || r['setor'] || norm['setor'] || '87').trim();
-    const rawData = formatDateStr(r['data'] || norm['data']);
+    const rawData = formatDateStr(r['data'] || norm['data'] || norm['data da atividade']);
 
-    // Extract week number carefully (avoiding year override from lowercase 'semana')
+    // Extract week number carefully using dateUtils helper
     let rawSemana = 0;
     if (typeof r['Semana'] === 'number' && r['Semana'] > 0 && r['Semana'] <= 53) {
       rawSemana = r['Semana'];
@@ -261,29 +378,16 @@ export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
       if (semFromNorm > 0 && semFromNorm <= 53) {
         rawSemana = semFromNorm;
       } else if (rawData) {
-        // Fallback: derive week from date
-        const parts = rawData.split('/');
-        if (parts.length === 3) {
-          const d = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-          if (!isNaN(d.getTime())) {
-            const target = new Date(d.valueOf());
-            const dayNr = (d.getDay() + 6) % 7;
-            target.setDate(target.getDate() - dayNr + 3);
-            const firstThursday = target.valueOf();
-            target.setMonth(0, 1);
-            if (target.getDay() !== 4) {
-              target.setMonth(0, 1 + ((4 - target.getDay() + 7) % 7));
-            }
-            rawSemana = 1 + Math.round((firstThursday - target.valueOf()) / 604800000);
-          }
-        }
+        rawSemana = getWeekNumber(rawData);
       }
     }
 
-    const rawAtividade = String(r['atividade'] || norm['o que foi feito no repro'] || norm['atividade'] || 'Repro').trim();
-    const rawColaborador = String(r['colaborador'] || norm['colaborador'] || '').toUpperCase().trim();
-    const rawVolumes = parsePtFloat(r['enderecos'] || r['qtdEnderecos'] || norm['qtd endereços'] || norm['qtd enderecos'] || norm['volumes'] || norm['qtd'] || 0);
-    const rawHoras = parsePtFloat(r['horas'] || norm['horas usadas'] || norm['horas'] || norm['tempo'] || 0);
+    const calculatedDia = rawData ? getDayOfWeekName(rawData) : String(norm['dia'] || 'Segunda');
+
+    const rawAtividade = String(r['atividade'] || norm['o que foi feito no repro'] || norm['atividade'] || norm['atividade realizada'] || 'Repro').trim();
+    const rawColaborador = String(r['colaborador'] || norm['colaborador'] || norm['nome do colaborador'] || '').toUpperCase().trim();
+    const rawVolumes = parsePtFloat(r['enderecos'] || r['qtdEnderecos'] || norm['qtd endereços'] || norm['qtd enderecos'] || norm['volumes'] || norm['qtd'] || norm['quantidade de paletes / endereços feitos'] || norm['quantidade de paletes / enderecos feitos'] || 0);
+    const rawHoras = parsePtFloat(r['horas'] || norm['horas usadas'] || norm['horas'] || norm['tempo'] || norm['tempo gasto (horas)'] || 0);
 
     const isIndireta = ['treinamentos', 'reuniões', 'reunioes', 'inventário', 'inventario', 'gestão de estoque', 'gestao de estoque', 'eid', 'missões de setor', 'missoes de setor'].some(term => rawAtividade.toLowerCase().includes(term));
 
@@ -293,7 +397,7 @@ export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
     return {
       id: norm['id'] ? Number(norm['id']) : Date.now() + idx,
       data: rawData || new Date().toLocaleDateString('pt-PT'),
-      dia: String(norm['dia'] || 'Segunda'),
+      dia: calculatedDia,
       semana: rawSemana || 1,
       atividade: rawAtividade,
       colaborador: rawColaborador || 'DESCONHECIDO',
@@ -311,18 +415,116 @@ export async function fetchFromGoogleSheets(apiUrl: string): Promise<Log[]> {
 }
 
 /**
+ * Validates Google Sheets URL format (Web App ID or Published Sheet ID)
+ */
+export function validateGoogleSheetUrl(url: string): { isValid: boolean; message: string; idFound?: string } {
+  if (!url || !url.trim()) {
+    return { isValid: false, message: 'Nenhuma URL informada.' };
+  }
+  const cleanUrl = url.trim();
+
+  if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+    return { isValid: false, message: 'URL deve começar com http:// ou https://' };
+  }
+
+  // Check Google Apps Script Web App URL (/macros/s/{scriptId}/exec)
+  if (cleanUrl.includes('script.google.com') || cleanUrl.includes('/macros/s/')) {
+    const scriptIdMatch = cleanUrl.match(/\/macros\/s\/([A-Za-z0-9_-]{20,})\/(exec|dev)/) || cleanUrl.match(/AKfycb[A-Za-z0-9_-]+/);
+    if (!scriptIdMatch) {
+      return { isValid: false, message: 'Falta o ID do deployment (/macros/s/AKfycb.../exec) na URL' };
+    }
+    return { isValid: true, message: 'Google Apps Script Web App ID Válido', idFound: scriptIdMatch[0] };
+  }
+
+  // Check Published Google Sheet URL (/spreadsheets/d/{sheetId} or /spreadsheets/d/e/{pubId})
+  if (cleanUrl.includes('docs.google.com/spreadsheets')) {
+    const pubIdMatch = cleanUrl.match(/\/spreadsheets\/d\/e\/([A-Za-z0-9_-]{20,})/) || cleanUrl.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]{20,})/);
+    if (!pubIdMatch) {
+      return { isValid: false, message: 'ID da Planilha não encontrado na URL do Google Sheets' };
+    }
+    return { isValid: true, message: 'Planilha Google ID Válido', idFound: pubIdMatch[1] };
+  }
+
+  return { isValid: false, message: 'URL não reconhecida como Google Sheets ou Google Apps Script' };
+}
+
+/**
+ * Fast ping and detailed connection diagnostic test for Google Apps Script / Google Sheets
+ */
+export async function pingGoogleSheetsEndpoint(apiUrl: string): Promise<{ success: boolean; latencyMs: number; message: string; details?: any }> {
+  const startTime = performance.now();
+  console.group('%c[Google Sheets Ping Diagnostic]', 'color: #38bdf8; font-weight: bold;');
+  console.log('Target API URL:', apiUrl);
+  console.log('Timestamp:', new Date().toISOString());
+
+  if (!apiUrl || !apiUrl.startsWith('http')) {
+    const errMsg = 'URL de integração vazia ou sem protocolo HTTP/HTTPS.';
+    console.error('❌ Connectivity Ping Failed:', errMsg);
+    console.groupEnd();
+    return { success: false, latencyMs: 0, message: errMsg };
+  }
+
+  const normalizedUrl = normalizeSheetUrl(apiUrl);
+  console.log('Normalized URL:', normalizedUrl);
+
+  try {
+    const proxyUrl = `/api/sheets/proxy?apiUrl=${encodeURIComponent(normalizedUrl)}`;
+    console.log('Attempting connection ping via proxy:', proxyUrl);
+
+    const response = await fetch(proxyUrl, { method: 'GET' });
+    const latencyMs = Math.round(performance.now() - startTime);
+
+    console.log(`HTTP Status: ${response.status} ${response.statusText}`);
+    console.log(`Latency: ${latencyMs}ms`);
+    console.log(`Content-Type: ${response.headers.get('content-type')}`);
+
+    if (response.ok) {
+      const text = await response.text();
+      console.log('Response Snippet (first 300 chars):', text.substring(0, 300));
+      const successMsg = `Ping com sucesso em ${latencyMs}ms (HTTP ${response.status}).`;
+      console.log('✅ Connection Test Successful:', successMsg);
+      console.groupEnd();
+      return { success: true, latencyMs, message: successMsg, details: text.substring(0, 500) };
+    } else {
+      const errorMsg = `HTTP Error ${response.status}: ${response.statusText}`;
+      console.error('❌ Connection Ping HTTP Error:', errorMsg);
+      console.groupEnd();
+      return { success: false, latencyMs, message: errorMsg };
+    }
+  } catch (err: any) {
+    const latencyMs = Math.round(performance.now() - startTime);
+    const errorDetails = {
+      message: err.message || 'Erro de rede ou CORS',
+      stack: err.stack,
+      apiUrl,
+      latencyMs
+    };
+    console.error('❌ Ping Exception Caught:', errorDetails.message);
+    console.dir(errorDetails);
+    console.groupEnd();
+
+    return { 
+      success: false, 
+      latencyMs, 
+      message: `Falha na conexão (${latencyMs}ms): ${err.message || 'Erro de rede'}` 
+    };
+  }
+}
+
+/**
  * Tests connection to Google Apps Script URL
  */
 export async function testApiConnection(apiUrl: string): Promise<{ success: boolean; message: string }> {
-  if (!apiUrl || !apiUrl.startsWith('http')) {
-    return { success: false, message: 'URL de integração vazia ou inválida.' };
+  const ping = await pingGoogleSheetsEndpoint(apiUrl);
+  if (!ping.success) {
+    return { success: false, message: ping.message };
   }
 
   try {
     const logs = await fetchFromGoogleSheets(apiUrl);
     return {
       success: true,
-      message: `Conexão estabelecida com sucesso! ${logs.length} registos encontrados na aba 'Controle de horas - Repro'.`
+      message: `Conexão estabelecida com sucesso (${ping.latencyMs}ms)! ${logs.length} registos encontrados na planilha Google.`
     };
   } catch (err: any) {
     console.error('Test API connection error:', err);
@@ -339,6 +541,7 @@ export async function testApiConnection(apiUrl: string): Promise<{ success: bool
 export async function postLogWithRetry(
   apiUrl: string,
   log: Log,
+  userUid?: string,
   maxAttempts = 3
 ): Promise<boolean> {
   let gsheetsSuccess = false;
@@ -359,12 +562,11 @@ export async function postLogWithRetry(
     }
   }
 
-  // Attempt 2: Supabase direct save if authenticated
+  // Attempt 2: Supabase direct save if userUid is provided
   let supabaseSuccess = false;
-  const currentUser = auth.currentUser;
-  if (currentUser) {
+  if (userUid) {
     try {
-      await saveLogsDirectly([log], currentUser.uid);
+      await saveLogsDirectly([log], userUid);
       supabaseSuccess = true;
     } catch (err) {
       console.warn('Supabase postLog retry warning:', err);
@@ -379,7 +581,8 @@ export async function postLogWithRetry(
  */
 export async function syncOfflineQueue(
   apiUrl: string,
-  onProgress?: (syncedCount: number) => void
+  onProgress?: (syncedCount: number) => void,
+  userUid?: string
 ): Promise<{ successCount: number; failedCount: number }> {
   const allLogs = await getLogs();
   const unsyncedLogs = allLogs.filter(l => !l.synced);
@@ -393,7 +596,7 @@ export async function syncOfflineQueue(
 
   for (let i = unsyncedLogs.length - 1; i >= 0; i--) {
     const log = unsyncedLogs[i];
-    const isSuccess = await postLogWithRetry(apiUrl, log);
+    const isSuccess = await postLogWithRetry(apiUrl, log, userUid);
 
     if (isSuccess) {
       log.synced = true;
@@ -413,7 +616,7 @@ export async function syncOfflineQueue(
 /**
  * Recovers logs from Google Sheets Web App or Supabase cloud
  */
-export async function fetchFromCloud(apiUrl: string): Promise<Log[]> {
+export async function fetchFromCloud(apiUrl: string, userUid?: string): Promise<Log[]> {
   // Try Google Sheets first if URL provided
   if (apiUrl && apiUrl.startsWith('http')) {
     try {
@@ -424,11 +627,10 @@ export async function fetchFromCloud(apiUrl: string): Promise<Log[]> {
     }
   }
 
-  // Try Supabase fallback if authenticated
-  const currentUser = auth.currentUser;
-  if (currentUser) {
+  // Try Supabase fallback if userUid provided
+  if (userUid) {
     try {
-      const cloudLogs = await fetchLogsDirectly(currentUser.uid);
+      const cloudLogs = await fetchLogsDirectly(userUid);
       return cloudLogs;
     } catch (err: any) {
       console.error('Failed to fetch logs from Supabase:', err);

@@ -15,10 +15,13 @@ import {
   getState,
   clearLogsAndState
 } from './dbLocal';
-import { onAuthStateChanged, signInWithPopup, signOut, User as FirebaseUser } from 'firebase/auth';
-import { auth, googleAuthProvider } from './lib/firebase';
 import { syncOfflineQueue, fetchFromCloud, postLogWithRetry } from './sheetService';
 import {
+  supabase,
+  getSupabase,
+  signInWithGoogle,
+  signOutSupabase,
+  getCurrentSupabaseUser,
   syncPerfilDirectly,
   fetchPerfilDirectly,
   saveLogsDirectly,
@@ -26,6 +29,7 @@ import {
   deleteLogDirectly,
   clearLogsDirectly
 } from './utils/supabase/client';
+import { getWeekNumber, getDayOfWeekName, formatDateToBR } from './utils/dateUtils';
 import { EventBus } from './eventBus';
 import { useSectorStore } from './stores/sectorStore';
 import { useCollaboratorStore } from './stores/collaboratorStore';
@@ -40,6 +44,7 @@ import BreakdownPanel from './components/BreakdownPanel';
 import HistoryTab from './components/HistoryTab';
 import WeeklyFollowupTab from './components/WeeklyFollowupTab';
 import Screensaver from './components/Screensaver';
+import FormModalFloatingButton from './components/FormModalFloatingButton';
 import { 
   LayoutDashboard, 
   History, 
@@ -53,14 +58,6 @@ import {
 } from 'lucide-react';
 
 const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
-
-function obterSemanaDoAno(date: Date): number {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-}
 
 function obterSetorDaAtividade(atividade: string): string {
   if (!atividade) return 'outros';
@@ -92,8 +89,8 @@ interface Toast {
 export default function App() {
   const [dbReady, setDbReady] = useState(false);
   
-  // Authentication states
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  // Authentication states (Supabase User or null)
+  const [user, setUser] = useState<any>(null);
   const [loadingUser, setLoadingUser] = useState(true);
   const [isGuestMode, setIsGuestMode] = useState(() => localStorage.getItem('repro_guest_mode') === 'true');
 
@@ -128,7 +125,8 @@ export default function App() {
     setIsImporting,
   } = useHistoryStore();
 
-  const [apiUrl, setApiUrl] = useState(localStorage.getItem('repro_sheets_api_url') || 'https://script.google.com/macros/s/AKfycbzOKrsUqrfa6W3V2leIleNkl6SZAwB5xMUt6qIw0ESMKPY1XS_ffv-QQRJHsYPkenWi/exec');
+  const defaultSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2/pubhtml?gid=357189506&single=true';
+  const [apiUrl, setApiUrl] = useState(localStorage.getItem('repro_sheets_api_url') || defaultSheetUrl);
   
   const [timerState, setTimerState] = useState<AppTimerState>({
     cronometro: { ativo: false, inicio: 0, segundos: 0, atividade: '', botaoId: '', tipo: 'direta' },
@@ -157,69 +155,90 @@ export default function App() {
     });
   }, [logs, activeSectorId]);
 
-  // Subscribe to Firebase Authentication and sync
+  // Subscribe to Supabase Authentication and sync
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        setUser(currentUser);
-        setIsGuestMode(false);
-        localStorage.setItem('repro_guest_mode', 'false');
-        
-        setSupabaseLoading(true);
-        try {
-          const email = currentUser.email || '';
-          const displayName = currentUser.displayName || currentUser.email || '';
-          
-          // 1. Sync or retrieve user profile in Supabase
-          const existingPerfil = await fetchPerfilDirectly(currentUser.uid);
-          let role = 'Pendente';
-          let sector = 'Geral';
-          
-          if (existingPerfil) {
-            role = existingPerfil.role || 'Pendente';
-            sector = existingPerfil.sector || 'Geral';
-            updateCurrentRole(role);
-          } else {
-            await syncPerfilDirectly(currentUser.uid, email, displayName, 'Pendente', 'Geral');
-          }
-          
-          addToast(`Sessão iniciada como ${displayName}. Perfil: ${role}`, 'var(--color-success)');
-          
-          // 2. Pull and sync records from Supabase
-          const cloudRecords = await fetchLogsDirectly(currentUser.uid);
-          for (const rec of cloudRecords) {
-            await saveLog({
-              id: rec.id,
-              data: rec.data,
-              dia: rec.dia,
-              semana: rec.semana,
-              atividade: rec.atividade,
-              colaborador: rec.colaborador,
-              setor: rec.setor,
-              volumes: rec.volumes,
-              horas: rec.horas,
-              vph: rec.vph,
-              timestamp: rec.timestamp,
-              synced: true,
-              tipo: rec.tipo
-            });
-          }
-          const refreshed = await getLogs();
-          setLogs(refreshed);
-        } catch (err: any) {
-          console.error("Cloud Supabase sync error:", err);
-          const errorCode = err.code || 'N/A';
-          const errorMsg = err.message || 'Erro de conexão';
-          addToast(`Erro ao sincronizar dados com Supabase: ${errorMsg} [Código: ${errorCode}]`, 'var(--color-danger)');
-        } finally {
-          setSupabaseLoading(false);
-        }
-      } else {
+    async function initUserSession(currentUser: any) {
+      if (!currentUser) {
         setUser(null);
+        setLoadingUser(false);
+        return;
       }
-      setLoadingUser(false);
-    });
-    return () => unsubscribe();
+
+      setUser(currentUser);
+      setIsGuestMode(false);
+      localStorage.setItem('repro_guest_mode', 'false');
+      
+      setSupabaseLoading(true);
+      try {
+        const email = currentUser.email || '';
+        const displayName = currentUser.user_metadata?.full_name || currentUser.email || 'Operador';
+        const userUid = currentUser.id || currentUser.uid;
+        
+        // 1. Sync or retrieve user profile in Supabase
+        const existingPerfil = await fetchPerfilDirectly(userUid);
+        let role = 'Pendente';
+        
+        if (existingPerfil) {
+          role = existingPerfil.role || 'Pendente';
+          updateCurrentRole(role);
+        } else {
+          await syncPerfilDirectly(userUid, email, displayName, 'Pendente', 'Geral');
+        }
+        
+        addToast(`Sessão iniciada como ${displayName}. Perfil: ${role}`, 'var(--color-success)');
+        
+        // 2. Pull and sync records from Supabase
+        const cloudRecords = await fetchLogsDirectly(userUid);
+        for (const rec of cloudRecords) {
+          await saveLog({
+            id: rec.id,
+            data: rec.data,
+            dia: rec.dia,
+            semana: rec.semana,
+            atividade: rec.atividade,
+            colaborador: rec.colaborador,
+            setor: rec.setor,
+            volumes: rec.volumes,
+            horas: rec.horas,
+            vph: rec.vph,
+            timestamp: rec.timestamp,
+            synced: true,
+            tipo: rec.tipo
+          });
+        }
+        const refreshed = await getLogs();
+        setLogs(refreshed);
+      } catch (err: any) {
+        console.error("Cloud Supabase sync error:", err);
+        const errorMsg = err.message || 'Erro de conexão';
+        addToast(`Erro ao sincronizar dados com Supabase: ${errorMsg}`, 'var(--color-danger)');
+      } finally {
+        setSupabaseLoading(false);
+        setLoadingUser(false);
+      }
+    }
+
+    getCurrentSupabaseUser().then(user => initUserSession(user));
+
+    const client = getSupabase();
+    let authListener: any = null;
+    if (client?.auth) {
+      const { data } = client.auth.onAuthStateChange(async (event, session) => {
+        if (session?.user) {
+          initUserSession(session.user);
+        } else {
+          setUser(null);
+          setLoadingUser(false);
+        }
+      });
+      authListener = data;
+    }
+
+    return () => {
+      if (authListener?.subscription) {
+        authListener.subscription.unsubscribe();
+      }
+    };
   }, []);
 
   // Periodic background cloud synchronization
@@ -232,7 +251,8 @@ export default function App() {
       
       setSupabaseLoading(true);
       try {
-        await saveLogsDirectly(unsyncedLogs, user.uid);
+        const userUid = user.id || user.uid;
+        await saveLogsDirectly(unsyncedLogs, userUid);
         for (const l of unsyncedLogs) {
           await saveLog({ ...l, synced: true });
         }
@@ -443,6 +463,29 @@ export default function App() {
       addToast("Erro ao sincronizar. Verifique as configuracoes.", 'var(--color-danger)');
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  // Retry synchronization for a single log
+  const handleRetrySyncLog = async (log: Log) => {
+    if (!apiUrl) {
+      addToast("Introduza a URL do Google Sheets nas configurações.", 'var(--color-danger)');
+      return;
+    }
+    addToast(`A reenviar o registo #${log.id}...`, 'var(--color-info)');
+    try {
+      const success = await postLogWithRetry(apiUrl, log);
+      if (success) {
+        const updatedLog: Log = { ...log, synced: true };
+        await saveLog(updatedLog);
+        setLogs(prev => prev.map(l => l.id === log.id ? updatedLog : l));
+        addToast(`Registo #${log.id} sincronizado com sucesso na planilha Google!`, 'var(--color-success)');
+      } else {
+        addToast(`Falha ao sincronizar o registo #${log.id}. Verifique a ligação.`, 'var(--color-danger)');
+      }
+    } catch (err) {
+      console.error('Error retrying log sync:', err);
+      addToast(`Erro ao tentar sincronizar o registo #${log.id}.`, 'var(--color-danger)');
     }
   };
 
@@ -735,9 +778,9 @@ export default function App() {
             </p>
             <ul className="list-disc pl-4 space-y-1.5 opacity-80">
               <li>Sincronização Instantânea: Registros unificados em tempo real.</li>
-              <li>Persistência Segura: Salvaguarda de dados no PostgreSQL em nuvem.</li>
+              <li>Persistência Segura: Salvaguarda de dados na nuvem Supabase.</li>
               <li>Multi-dispositivo: Opere a torre de comando de qualquer ecrã.</li>
-              <li>Autenticação Google: Login seguro e único.</li>
+              <li>Autenticação Google / Supabase: Login seguro e único.</li>
             </ul>
           </div>
 
@@ -745,7 +788,7 @@ export default function App() {
             <button
               onClick={async () => {
                 try {
-                  await signInWithPopup(auth, googleAuthProvider);
+                  await signInWithGoogle();
                 } catch (err) {
                   console.error("Sign in failed:", err);
                   addToast("Falha no login com Google.", "var(--color-danger)");
@@ -754,7 +797,7 @@ export default function App() {
               className="w-full py-3.5 bg-terminal-accent text-black font-bold text-xs uppercase tracking-widest rounded flex items-center justify-center gap-2 cursor-pointer hover:bg-transparent hover:text-terminal-accent border border-terminal-accent transition-all shadow-lg active:scale-95 font-mono"
             >
               <LogIn size={16} />
-              Entrar com Google
+              Entrar com Google / Supabase
             </button>
 
             <button
@@ -878,11 +921,11 @@ export default function App() {
             <div className="flex flex-wrap items-centralizados gap-2 mt-1 text-[0.55rem] text-terminal-text opacity-80 font-mono justify-start md:justify-end">
               {user ? (
                 <>
-                  <span>OPERANDO COMO: <strong className="text-white uppercase">{user.displayName || user.email}</strong></span>
+                  <span>OPERANDO COMO: <strong className="text-white uppercase">{user.user_metadata?.full_name || user.email}</strong></span>
                   <span className="text-terminal-border/50">•</span>
                   <button
                     onClick={async () => {
-                      await signOut(auth);
+                      await signOutSupabase();
                       addToast("Sessão terminada.", 'var(--color-info)');
                     }}
                     className="px-1.5 py-0.5 bg-terminal-accent/10 border border-terminal-accent/30 text-terminal-accent hover:bg-terminal-accent hover:text-black rounded cursor-pointer transition-all"
@@ -898,7 +941,7 @@ export default function App() {
                   }}
                   className="px-2 py-0.5 bg-terminal-accent/15 border border-terminal-accent/40 text-terminal-accent hover:bg-terminal-accent hover:text-black rounded cursor-pointer transition-all uppercase tracking-wider font-bold"
                 >
-                  CONECTAR CLOUD POSTGRESQL ⚡
+                  CONECTAR CLOUD SUPABASE ⚡
                 </button>
               )}
             </div>
@@ -1084,6 +1127,8 @@ export default function App() {
               onDeleteLog={handleDeleteLog}
               onExportBackup={handleExportBackup}
               onClearDb={handleClearDb}
+              onRetrySync={handleRetrySyncLog}
+              apiUrl={apiUrl}
             />
           </div>
         )}
@@ -1092,11 +1137,15 @@ export default function App() {
           <div className="animate-fade-in">
             <HistoryTab 
               logs={logs} 
+              apiUrl={apiUrl}
               onRefresh={async () => {
                 const refreshedLogs = await getLogs();
                 setLogs(refreshedLogs);
               }} 
-              onAddToast={addToast} 
+              onAddToast={addToast}
+              onImportCloud={importarPlanilha}
+              onRetrySync={handleRetrySyncLog}
+              userUid={user?.id || user?.uid}
             />
           </div>
         )}
@@ -1111,6 +1160,7 @@ export default function App() {
                 const refreshedLogs = await getLogs();
                 setLogs(refreshedLogs);
               }}
+              userUid={user?.id || user?.uid}
             />
           </div>
         )}
@@ -1125,6 +1175,9 @@ export default function App() {
           currentRole={currentRole}
         />
       )}
+
+      {/* FLOATING FORM MODAL BUTTON */}
+      <FormModalFloatingButton formUrl="https://docs.google.com/forms/d/e/1FAIpQLSdIMZqQ2_N7FDheTwynysUK_tcCtZ4ETiUsGmOAFu_V2MFc9w/viewform?usp=dialog" />
     </div>
   );
 }

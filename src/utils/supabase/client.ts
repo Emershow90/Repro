@@ -32,6 +32,35 @@ export function getSupabase() {
   return supabaseInstance;
 }
 
+export const supabase = getSupabase();
+
+export async function signInWithGoogle() {
+  const client = getSupabase();
+  if (!client) throw new Error("Supabase client não está inicializado. Configure as variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.");
+  const { data, error } = await client.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin
+    }
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function signOutSupabase() {
+  const client = getSupabase();
+  if (client) {
+    await client.auth.signOut();
+  }
+}
+
+export async function getCurrentSupabaseUser() {
+  const client = getSupabase();
+  if (!client) return null;
+  const { data: { user } } = await client.auth.getUser();
+  return user;
+}
+
 /**
  * Sync profile 'perfil' table for user permissions
  */

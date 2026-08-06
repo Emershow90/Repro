@@ -31,70 +31,23 @@ import {
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import { saveLog, deleteLog } from '../dbLocal';
-import { auth } from '../lib/firebase';
 import { saveLogsDirectly } from '../utils/supabase/client';
 import { EventBus } from '../eventBus';
-
-// Constants
-const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
-
-// Helper to calculate week of the year
-function obterSemanaDoAno(date: Date): number {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-}
-
-// Convert DD/MM/YYYY, Date object, or Excel Date Serial number to Date object
-function parseDateString(val: any): Date | null {
-  if (val === null || val === undefined || val === '') return null;
-  
-  // If it's already a native Date object
-  if (val instanceof Date) {
-    return isNaN(val.getTime()) ? null : val;
-  }
-  
-  // If it's a number (Excel date serial)
-  if (typeof val === 'number') {
-    if (val > 25000 && val < 100000) {
-      const d = new Date(Math.round((val - 25569) * 86400 * 1000));
-      if (!isNaN(d.getTime())) return d;
-    }
-  }
-
-  const str = String(val).trim();
-  if (!str) return null;
-
-  // Try parsing string representing an Excel date serial
-  const num = Number(str);
-  if (!isNaN(num) && num > 25000 && num < 100000) {
-    const d = new Date(Math.round((num - 25569) * 86400 * 1000));
-    if (!isNaN(d.getTime())) return d;
-  }
-
-  // Handle DD/MM/YYYY formats
-  const parts = str.split('/');
-  if (parts.length === 3) {
-    const day = parseInt(parts[0], 10);
-    const month = parseInt(parts[1], 10) - 1;
-    const year = parseInt(parts[2], 10);
-    const d = new Date(year, month, day);
-    if (!isNaN(d.getTime())) return d;
-  }
-  
-  // Handle ISO/standard JS date string formats
-  const isoDate = new Date(str);
-  if (!isNaN(isoDate.getTime())) return isoDate;
-  
-  return null;
-}
+import { 
+  parseDateString, 
+  getWeekNumber, 
+  getDayOfWeekName, 
+  DIAS_DA_SEMANA as diasDaSemana 
+} from '../utils/dateUtils';
 
 interface HistoryTabProps {
   logs: Log[];
   onRefresh: () => void;
   onAddToast: (msg: string, color?: string) => void;
+  apiUrl?: string;
+  onImportCloud?: () => Promise<void>;
+  onRetrySync?: (log: Log) => void;
+  userUid?: string;
 }
 
 interface ParsedImportRow {
@@ -104,7 +57,15 @@ interface ParsedImportRow {
   reason?: string;
 }
 
-export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabProps) {
+export default function HistoryTab({ 
+  logs, 
+  onRefresh, 
+  onAddToast,
+  apiUrl = '',
+  onImportCloud,
+  onRetrySync,
+  userUid
+}: HistoryTabProps) {
   // Advanced filters
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedActivity, setSelectedActivity] = useState('');
@@ -368,7 +329,7 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
 
           // Calculate dia da semana and semana do ano
           const diaSemana = diasDaSemana[parsedDateObj.getDay()];
-          const semanaAno = obterSemanaDoAno(parsedDateObj);
+          const semanaAno = getWeekNumber(parsedDateObj);
           
           // Determine tipo
           const ehIndireta = atividade.toUpperCase().startsWith("IND:") || atividade.toLowerCase().includes("indireta");
@@ -428,14 +389,13 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
     }
 
     try {
-      const currentUser = auth.currentUser;
       const isOnline = navigator.onLine;
       let syncSuccess = false;
       let logsToSave = validRowsToImport.map(r => r.log!);
 
-      if (currentUser && isOnline) {
+      if (userUid && isOnline) {
         try {
-          await saveLogsDirectly(logsToSave, currentUser.uid);
+          await saveLogsDirectly(logsToSave, userUid);
           logsToSave = logsToSave.map(l => ({ ...l, synced: true }));
           syncSuccess = true;
         } catch (syncErr: any) {
@@ -470,7 +430,7 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
     // Filter by Range
     if (exportRange === 'week') {
       const today = new Date();
-      const currentWeekNum = obterSemanaDoAno(today);
+      const currentWeekNum = getWeekNumber(today);
       logsToExport = logsToExport.filter(l => l.semana === currentWeekNum);
     } else if (exportRange === 'month') {
       const today = new Date();
@@ -786,7 +746,7 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
       doc.setFontSize(8);
       const parsedD = parseDateString(targetDateStr);
       const dayName = parsedD ? diasDaSemana[parsedD.getDay()] : '--';
-      const weekNum = parsedD ? obterSemanaDoAno(parsedD) : '--';
+      const weekNum = parsedD ? getWeekNumber(parsedD) : '--';
       doc.text(`Data: ${targetDateStr} (${dayName})`, pageWidth - 70, 23);
       doc.text(`Semana do Ano: ${weekNum}`, pageWidth - 70, 28);
 
@@ -991,12 +951,23 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
 
         {/* TOP BUTTONS CONTAINER */}
         <div className="flex flex-wrap gap-2 w-full lg:w-auto">
+          {onImportCloud && (
+            <button
+              onClick={onImportCloud}
+              className="flex-1 lg:flex-none flex items-center justify-center gap-1.5 px-3 py-2 text-[0.6rem] font-bold uppercase tracking-widest bg-terminal-accent/10 text-terminal-accent border border-terminal-accent/40 hover:bg-terminal-accent/20 hover:border-terminal-accent rounded-sm cursor-pointer transition-all font-mono"
+              title="Conectar e sincronizar com a planilha Google Sheets"
+            >
+              <FileSpreadsheet size={12} />
+              <span>⬇️ Sincronizar da Planilha</span>
+            </button>
+          )}
+
           <button
             onClick={() => setIsImportModalOpen(true)}
             className="flex-1 lg:flex-none flex items-center justify-center gap-1.5 px-3 py-2 text-[0.6rem] font-bold uppercase tracking-widest bg-info/10 text-info border border-info/30 hover:bg-info/20 hover:border-info rounded-sm cursor-pointer transition-all"
           >
             <Upload size={12} />
-            <span>Importar Planilha</span>
+            <span>Importar Ficheiro</span>
           </button>
 
           <button
@@ -1173,6 +1144,7 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
                 >
                   Data {sortField === 'timestamp' && (sortAsc ? '▲' : '▼')}
                 </th>
+                <th className="p-3 font-semibold text-center">Nuvem</th>
                 <th className="p-3 font-semibold">Dia da Semana</th>
                 <th className="p-3 font-semibold text-center">Semana</th>
                 <th className="p-3 font-semibold">O que foi feito no Repro</th>
@@ -1202,9 +1174,26 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
             <tbody className="divide-y divide-terminal-border/30 text-[0.7rem] font-medium text-terminal-text/90">
               {paginatedLogs.map((log) => {
                 const isIndireta = log.tipo === 'indireta';
+                const isFailed = !log.synced;
+                
+                const rowStyle = isFailed
+                  ? 'bg-danger/10 text-danger border-b border-danger/30 hover:bg-danger/15'
+                  : 'hover:bg-terminal-panel/10 border-b border-terminal-border/20';
+
                 return (
-                  <tr key={log.id} className="hover:bg-terminal-panel/10 border-b border-terminal-border/20 transition-colors">
+                  <tr key={log.id} className={`${rowStyle} transition-colors`}>
                     <td className="p-3 font-mono text-center">{log.data}</td>
+                    <td className="p-3 text-center">
+                      {log.synced ? (
+                        <span className="text-terminal-accent text-[0.6rem] font-bold px-1.5 py-0.5 bg-terminal-accent/10 border border-terminal-accent/30 rounded-sm">
+                          ✓ Nuvem
+                        </span>
+                      ) : (
+                        <span className="text-danger text-[0.6rem] font-bold px-1.5 py-0.5 bg-danger/20 border border-danger/50 rounded-sm inline-flex items-center gap-1 animate-pulse">
+                          ⚠️ FALHO
+                        </span>
+                      )}
+                    </td>
                     <td className="p-3 opacity-60 font-mono text-center">{log.dia}</td>
                     <td className="p-3 opacity-60 font-mono text-center">Semana {log.semana}</td>
                     <td className="p-3">
@@ -1218,10 +1207,10 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
                     <td className="p-3 text-right font-mono text-white">
                       {isIndireta ? '-' : log.volumes.toLocaleString('pt-PT')}
                     </td>
-                    <td className="p-3 text-right font-mono text-warning font-bold">
+                    <td className={`p-3 text-right font-mono font-bold ${isFailed ? 'text-danger' : 'text-warning'}`}>
                       {log.horas.toFixed(2)}h
                     </td>
-                    <td className="p-3 text-right font-mono text-terminal-accent font-bold">
+                    <td className={`p-3 text-right font-mono font-bold ${isFailed ? 'text-danger' : 'text-terminal-accent'}`}>
                       {isIndireta ? (
                         <span className="text-terminal-text opacity-30 text-[0.6rem]">INDIRETA</span>
                       ) : (
@@ -1238,8 +1227,17 @@ export default function HistoryTab({ logs, onRefresh, onAddToast }: HistoryTabPr
                         <Printer size={12} />
                       </button>
                     </td>
-                    {/* Delete Action */}
-                    <td className="p-2 text-center">
+                    {/* Actions: Retry + Delete */}
+                    <td className="p-2 text-center flex items-center justify-center gap-1.5">
+                      {!log.synced && onRetrySync && (
+                        <button
+                          onClick={() => onRetrySync(log)}
+                          className="text-danger hover:bg-danger hover:text-white border border-danger/60 px-1.5 py-0.5 text-[0.55rem] font-mono font-bold uppercase rounded-sm cursor-pointer transition-all flex items-center gap-1"
+                          title="Tentar reenviar este registro para o Google Sheets"
+                        >
+                          🔄 Tentar
+                        </button>
+                      )}
                       <button
                         onClick={() => deleteRowFromHistory(log.id)}
                         className="text-danger hover:bg-danger/10 hover:border-danger transition-all cursor-pointer inline-flex items-center justify-center p-1 border border-terminal-border/50 rounded-sm"
