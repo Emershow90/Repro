@@ -17,6 +17,8 @@ export interface Log {
   synced: boolean;
   tipo: 'direta' | 'indireta';
   setor?: string;
+  horaInicio?: string;
+  horaFim?: string;
 }
 
 export interface StopwatchState {

@@ -14,13 +14,18 @@ import {
   calculateVphBruto,
   parseDateString
 } from '../services/followupService';
+import { isLogMatchingSector, deduplicateLogs } from '../utils/logUtils';
 
-export function useFollowup(logs: Log[], selectedWeekNum: number, activeSectorId: string = 'todos') {
-  // Filter logs by active sector if specified
+export function useFollowup(rawLogs: Log[], selectedWeekNum: number, activeSectorId: string = 'todos') {
+  // Deduplicate logs first to avoid repetition
+  const cleanLogs = useMemo(() => {
+    return deduplicateLogs(rawLogs);
+  }, [rawLogs]);
+
+  // Filter logs by active sector (supporting 87 solo, 88_89_90 unified, or specific)
   const sectorLogs = useMemo(() => {
-    if (activeSectorId === 'todos') return logs;
-    return logs.filter(l => l.setor === activeSectorId);
-  }, [logs, activeSectorId]);
+    return cleanLogs.filter(l => isLogMatchingSector(l.setor, activeSectorId, l.atividade));
+  }, [cleanLogs, activeSectorId]);
 
   // Week logs
   const weekLogs = useMemo(() => {
@@ -63,6 +68,8 @@ export function useFollowup(logs: Log[], selectedWeekNum: number, activeSectorId
   }, [weekLogs]);
 
   return {
+    cleanLogs,
+    sectorLogs,
     weekLogs,
     kpis,
     activitiesSummary,

@@ -4,6 +4,7 @@
  */
 
 import { Log } from '../types';
+import { LineChart as ChartIcon } from 'lucide-react';
 
 interface VphChartProps {
   logs: Log[];
@@ -15,9 +16,9 @@ export default function VphChart({ logs }: VphChartProps) {
 
   if (uniqueWeeks.length < 2) {
     return (
-      <div className="w-full h-48 bg-terminal-bg/50 border border-terminal-border/40 rounded-sm flex items-centralizados justify-centralizado">
-        <p className="text-[0.6rem] text-terminal-text opacity-45 uppercase tracking-widest text-center">
-          DADOS INSUFICIENTES PARA EVOLUÇÃO (MÍNIMO 2 SEMANAS REGISTADAS)
+      <div className="w-full h-44 bg-black/40 border border-white/10 rounded-2xl flex items-center justify-center p-4">
+        <p className="text-[0.62rem] text-slate-400 font-mono uppercase tracking-wider text-center">
+          📊 Dados insuficientes para gráfico evolutivo (necessário no mínimo 2 semanas registadas)
         </p>
       </div>
     );
@@ -29,9 +30,9 @@ export default function VphChart({ logs }: VphChartProps) {
   const padY = 30;
 
   const colorMap: { [key: string]: string } = {
-    'REPRO': 'var(--color-success)',
-    'ELOG': 'var(--color-warning)',
-    'DIVERSOS': 'var(--color-info)'
+    'REPRO': '#10b981',
+    'ELOG': '#f59e0b',
+    'DIVERSOS': '#3b82f6'
   };
 
   let maxVph = 0;
@@ -83,20 +84,25 @@ export default function VphChart({ logs }: VphChartProps) {
   }
 
   return (
-    <div className="w-full bg-terminal-bg/50 border border-terminal-border/40 rounded-sm p-4">
-      <div className="flex justify-espaçado items-centralizados mb-4 pb-2 border-b border-terminal-border/40">
-        <h2 className="text-xs font-bold text-white uppercase tracking-widest opacity-60">
-          [EVOLUÇÃO DE PRODUTIVIDADE (VPH)]
-        </h2>
-        <div className="flex gap-4 text-[0.55rem] font-bold tracking-widest">
-          <span className="flex items-centralizados gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-success"></span>REPRO
+    <div className="w-full bg-black/40 border border-white/10 rounded-2xl p-5 relative overflow-hidden backdrop-blur-md">
+      <div className="flex justify-between items-center mb-4 pb-2.5 border-b border-white/10">
+        <div className="flex items-center gap-2">
+          <div className="p-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <ChartIcon size={14} />
+          </div>
+          <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+            Evolução de Produtividade (VPH)
+          </h2>
+        </div>
+        <div className="flex gap-3 text-[0.6rem] font-bold tracking-wider font-mono">
+          <span className="flex items-center gap-1.5 text-emerald-400">
+            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>REPRO
           </span>
-          <span className="flex items-centralizados gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-warning"></span>ELOG
+          <span className="flex items-center gap-1.5 text-amber-400">
+            <span className="w-2 h-2 rounded-full bg-amber-400"></span>ELOG
           </span>
-          <span className="flex items-centralizados gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-info"></span>DIVERSOS
+          <span className="flex items-center gap-1.5 text-blue-400">
+            <span className="w-2 h-2 rounded-full bg-blue-400"></span>DIV
           </span>
         </div>
       </div>
@@ -112,16 +118,14 @@ export default function VphChart({ logs }: VphChartProps) {
                   y1={line.yPos}
                   x2={width - padX}
                   y2={line.yPos}
-                  stroke="var(--color-terminal-border)"
+                  stroke="rgba(255,255,255,0.08)"
                   strokeWidth={1}
-                  strokeOpacity={0.3}
                   strokeDasharray="4"
                 />
                 <text
                   x={padX - 14}
                   y={line.yPos + 3}
-                  fill="var(--color-terminal-text)"
-                  fillOpacity={0.4}
+                  fill="rgba(226,232,240,0.4)"
                   fontSize={9}
                   textAnchor="middle"
                   fontFamily="monospace"
@@ -138,12 +142,12 @@ export default function VphChart({ logs }: VphChartProps) {
                 <text
                   key={i}
                   x={xPos}
-                  y={height - padY + 15}
-                  fill="var(--color-terminal-text)"
-                  fillOpacity={0.4}
-                  fontSize={9}
+                  y={height - padY + 16}
+                  fill="rgba(226,232,240,0.5)"
+                  fontSize={10}
                   textAnchor="middle"
                   fontFamily="monospace"
+                  fontWeight="bold"
                 >
                   S{sem}
                 </text>
@@ -169,9 +173,8 @@ export default function VphChart({ logs }: VphChartProps) {
                 <g key={act}>
                   <path
                     d={dStr}
-                    className="chart-line"
                     stroke={color}
-                    strokeWidth={1.5}
+                    strokeWidth={2}
                     fill="none"
                   />
                   {pts.map((p, idx) => {
@@ -182,11 +185,11 @@ export default function VphChart({ logs }: VphChartProps) {
                         key={idx}
                         cx={cx}
                         cy={cy}
-                        r={3.5}
-                        fill="var(--color-terminal-panel)"
+                        r={4}
+                        fill="#0b0d13"
                         stroke={color}
-                        strokeWidth={1.5}
-                        className="chart-point"
+                        strokeWidth={2}
+                        className="transition-all hover:r-6 cursor-pointer"
                       >
                         <title>
                           {act} (S{uniqueWeeks[p.xIdx]}): {p.val.toFixed(1)} VPH

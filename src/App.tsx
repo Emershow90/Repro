@@ -29,13 +29,14 @@ import {
   deleteLogDirectly,
   clearLogsDirectly
 } from './utils/supabase/client';
-import { getWeekNumber, getDayOfWeekName, formatDateToBR } from './utils/dateUtils';
+import { getWeekNumber, getDayOfWeekName, formatDateToBR, parseDateString } from './utils/dateUtils';
 import { EventBus } from './eventBus';
 import { useSectorStore } from './stores/sectorStore';
 import { useCollaboratorStore } from './stores/collaboratorStore';
 import { useUIStore } from './stores/uiStore';
 import { useHistoryStore } from './stores/historyStore';
 import DashboardMetrics from './components/DashboardMetrics';
+import TemporalFilterBar from './components/TemporalFilterBar';
 import StopwatchPanel from './components/StopwatchPanel';
 import RankingTable from './components/RankingTable';
 import RecentLogsTable from './components/RecentLogsTable';
@@ -45,6 +46,14 @@ import HistoryTab from './components/HistoryTab';
 import WeeklyFollowupTab from './components/WeeklyFollowupTab';
 import Screensaver from './components/Screensaver';
 import FormModalFloatingButton from './components/FormModalFloatingButton';
+import { 
+  deduplicateLogs, 
+  isLogMatchingSector, 
+  filterLogsByPeriod, 
+  PeriodType, 
+  getMonthYearKey, 
+  formatDateToPt 
+} from './utils/logUtils';
 import { 
   LayoutDashboard, 
   History, 
@@ -136,6 +145,19 @@ export default function App() {
   const [inputOpen, setInputOpen] = useState(false);
   const [ticks, setTicks] = useState(0);
 
+  // Parallax mouse position tracking for organic ambient effect
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      const { innerWidth, innerHeight } = window;
+      const x = (e.clientX / innerWidth - 0.5) * 35;
+      const y = (e.clientY / innerHeight - 0.5) * 35;
+      setMousePos({ x, y });
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
+
   const updateScreensaverEnabled = (enabled: boolean) => {
     storeUpdateScreensaverEnabled(enabled, addToast);
   };
@@ -144,16 +166,35 @@ export default function App() {
     storeUpdateScreensaverTimeout(timeout, addToast);
   };
 
-  // Dynamically filtered logs based on active sector focus
+  // Temporal Filter State for Dashboard
+  const [temporalPeriod, setTemporalPeriod] = useState<PeriodType>('todos');
+  const [selectedDate, setSelectedDate] = useState<string>(() => formatDateToPt(new Date()));
+  const [selectedWeek, setSelectedWeek] = useState<number>(() => getWeekNumber(new Date()));
+  const [selectedMonthKey, setSelectedMonthKey] = useState<string>(() => getMonthYearKey(formatDateToPt(new Date())));
+
+  // 1. Clean deduplicated logs (no repetitive records)
+  const cleanLogs = useMemo(() => {
+    return deduplicateLogs(logs);
+  }, [logs]);
+
+  // Available weeks & months derived from clean data
+  const availableWeeks = useMemo(() => {
+    return Array.from(new Set(cleanLogs.map(l => Number(l.semana)))).sort((a, b) => Number(b) - Number(a));
+  }, [cleanLogs]);
+
+  const availableMonths = useMemo(() => {
+    return Array.from(new Set(cleanLogs.map(l => getMonthYearKey(l.data)).filter((k): k is string => Boolean(k)))).sort();
+  }, [cleanLogs]);
+
+  // 2. Filter by sector (handles 87 solo, 88_89_90 unified, and todos)
+  const sectorLogs = useMemo(() => {
+    return cleanLogs.filter(log => isLogMatchingSector(log.setor, activeSectorId, log.atividade));
+  }, [cleanLogs, activeSectorId]);
+
+  // 3. Filter by temporal period (diario, semanal, mensal, todos)
   const filteredLogs = useMemo(() => {
-    if (activeSectorId === 'todos') return logs;
-    return logs.filter(log => {
-      if (log.setor && log.setor === activeSectorId) {
-        return true;
-      }
-      return obterSetorDaAtividade(log.atividade) === activeSectorId;
-    });
-  }, [logs, activeSectorId]);
+    return filterLogsByPeriod(sectorLogs, temporalPeriod, selectedDate, selectedWeek, selectedMonthKey);
+  }, [sectorLogs, temporalPeriod, selectedDate, selectedWeek, selectedMonthKey]);
 
   // Subscribe to Supabase Authentication and sync
   useEffect(() => {
@@ -534,13 +575,6 @@ export default function App() {
     return dias[new Date().getDay()];
   };
 
-  const getWeekNumber = (d: Date) => {
-    d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-    d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
-    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-    return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-  };
-
   const saveLogAndSync = async (log: Log) => {
     await saveLog(log);
     setLogs(prev => [log, ...prev]);
@@ -598,19 +632,27 @@ export default function App() {
     addToast("Registo cancelado.", 'var(--color-danger)');
   };
 
-  const saveTimer = async (colab: string, volumes: number) => {
-    const decimalHours = timerState.cronometro?.segundos / 3600;
+  const saveTimer = async (
+    colab: string, 
+    volumes: number, 
+    customHours?: number, 
+    horaInicio?: string, 
+    horaFim?: string
+  ) => {
+    const defaultDecimalHours = (timerState.cronometro?.segundos || 0) / 3600;
+    const decimalHours = (customHours !== undefined && customHours > 0) ? customHours : defaultDecimalHours;
     
     if (!colab.trim()) {
       addToast("Operador não definido.", 'var(--color-danger)');
       return;
     }
 
+    const todayDate = new Date();
     const newLog: Log = {
       id: Date.now(),
-      data: new Date().toLocaleDateString('pt-PT'),
-      dia: getDiaDaSemana(),
-      semana: getWeekNumber(new Date()),
+      data: formatDateToBR(todayDate),
+      dia: getDayOfWeekName(todayDate),
+      semana: getWeekNumber(todayDate),
       atividade: timerState.cronometro?.tipo === 'indireta' ? `IND: ${timerState.cronometro?.atividade}` : timerState.cronometro?.atividade,
       colaborador: colab.toUpperCase(),
       volumes: volumes,
@@ -619,12 +661,12 @@ export default function App() {
       timestamp: Date.now(),
       synced: false,
       tipo: timerState.cronometro?.tipo,
-      setor: activeSectorId
+      setor: activeSectorId,
+      horaInicio: horaInicio || undefined,
+      horaFim: horaFim || undefined
     };
 
     await saveLogAndSync(newLog);
-
-
 
     setTimerState(prev => {
       const updated = { ...prev };
@@ -634,6 +676,52 @@ export default function App() {
     });
     setInputOpen(false);
     addToast("Registo gravado com sucesso!", 'var(--color-success)');
+  };
+
+  const handleSaveManualLog = async (entry: {
+    data: string;
+    setor: string;
+    atividade: string;
+    colaborador: string;
+    volumes: number;
+    horas: number;
+    horaInicio?: string;
+    horaFim?: string;
+    tipo: 'direta' | 'indireta';
+  }) => {
+    if (!entry.colaborador.trim()) {
+      addToast("Operador não definido.", 'var(--color-danger)');
+      return;
+    }
+    if (entry.horas <= 0) {
+      addToast("Duração em horas deve ser maior que zero.", 'var(--color-danger)');
+      return;
+    }
+
+    const parsedDate = parseDateString(entry.data) || new Date();
+    const decimalHours = entry.horas;
+    const isDirect = entry.tipo === 'direta';
+
+    const newLog: Log = {
+      id: Date.now(),
+      data: formatDateToBR(parsedDate),
+      dia: getDayOfWeekName(parsedDate),
+      semana: getWeekNumber(parsedDate),
+      atividade: entry.tipo === 'indireta' && !entry.atividade.toUpperCase().startsWith('IND:') ? `IND: ${entry.atividade}` : entry.atividade,
+      colaborador: entry.colaborador.toUpperCase(),
+      volumes: isDirect ? entry.volumes : 0,
+      horas: Number(decimalHours.toFixed(2)),
+      vph: (decimalHours > 0 && entry.volumes > 0 && isDirect) ? (entry.volumes / decimalHours).toFixed(2) : "0.00",
+      timestamp: Date.now(),
+      synced: false,
+      tipo: entry.tipo,
+      setor: entry.setor || activeSectorId,
+      horaInicio: entry.horaInicio || undefined,
+      horaFim: entry.horaFim || undefined
+    };
+
+    await saveLogAndSync(newLog);
+    addToast("Registo manual gravado com sucesso!", 'var(--color-success)');
   };
 
   const handleDeleteLog = async (id: number) => {
@@ -732,6 +820,55 @@ export default function App() {
   // List of collaborators to show as autocomplete helper
   const colabHistory: string[] = Array.from(new Set(logs.map(l => l.colaborador)));
 
+  // System diagnostic and restore procedure
+  const handleRestoreSystem = async () => {
+    setIsSyncing(true);
+    addToast("Iniciando restauração e diagnóstico do sistema...", 'var(--color-info)');
+    try {
+      await initDb();
+      const localLogs = await getLogs();
+      setLogs(localLogs);
+
+      // Reset any broken timer state
+      await saveState('appState', {
+        cronometro: { ativo: false, inicio: 0, segundos: 0, atividade: '', botaoId: '', tipo: 'direta' },
+        rascunhoColab: '',
+        rascunhoVol: ''
+      });
+      setTimerState({
+        cronometro: { ativo: false, inicio: 0, segundos: 0, atividade: '', botaoId: '', tipo: 'direta' },
+        rascunhoColab: '',
+        rascunhoVol: ''
+      });
+      setInputOpen(false);
+
+      if (networkStatus === 'online') {
+        if (apiUrl) {
+          await sincronizarFila(false);
+        }
+        if (user) {
+          const userUid = user.id || user.uid;
+          const cloudRecs = await fetchLogsDirectly(userUid);
+          if (cloudRecs && cloudRecs.length > 0) {
+            for (const rec of cloudRecs) {
+              await saveLog({ ...rec, synced: true });
+            }
+            const refreshed = await getLogs();
+            setLogs(refreshed);
+          }
+        }
+      }
+
+      setLastSyncTime(new Date().toLocaleTimeString('pt-PT'));
+      addToast("✅ Sistema 100% restaurado! Base sincronizada e estável.", 'var(--color-success)');
+    } catch (err: any) {
+      console.error("Erro na restauração:", err);
+      addToast(`Falha na restauração: ${err.message || 'Erro de conexão'}`, 'var(--color-danger)');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   if (loadingUser) {
     return (
       <div className="terminal-root min-h-screen flex flex-col items-center justify-center p-4">
@@ -823,14 +960,34 @@ export default function App() {
   }
 
   return (
-    <div className="terminal-root p-4 md:p-8 flex flex-col items-center">
+    <div className="terminal-root p-4 md:p-8 flex flex-col items-center relative overflow-hidden">
       
+      {/* Dynamic Parallax Floating Background Spheres */}
+      <div 
+        className="parallax-orb parallax-orb-1"
+        style={{
+          transform: `translate3d(${mousePos.x * 0.8}px, ${mousePos.y * 0.8}px, 0)`
+        }}
+      />
+      <div 
+        className="parallax-orb parallax-orb-2"
+        style={{
+          transform: `translate3d(${-mousePos.x * 1.2}px, ${-mousePos.y * 1.2}px, 0)`
+        }}
+      />
+      <div 
+        className="parallax-orb parallax-orb-3"
+        style={{
+          transform: `translate3d(${mousePos.x * 0.5}px, ${mousePos.y * 0.5}px, 0)`
+        }}
+      />
+
       {/* Global Supabase Loading Progress and Spinner feedback */}
       {supabaseLoading && (
         <div className="fixed top-0 left-0 w-full z-50 pointer-events-none">
-          <div className="h-1 bg-gradient-to-r from-transparent via-terminal-accent to-transparent animate-pulse w-full"></div>
-          <div className="absolute right-4 top-4 flex items-center gap-2 bg-black/85 border border-terminal-accent/60 px-3 py-1.5 rounded text-[10px] font-mono text-terminal-accent shadow-2xl animate-pulse">
-            <Loader2 size={12} className="animate-spin text-terminal-accent" />
+          <div className="h-1 bg-gradient-to-r from-transparent via-emerald-400 to-transparent animate-pulse w-full"></div>
+          <div className="absolute right-4 top-4 flex items-center gap-2 bg-black/90 border border-emerald-500/50 px-3 py-1.5 rounded-xl text-[10px] font-mono text-emerald-400 shadow-2xl backdrop-blur-md">
+            <Loader2 size={12} className="animate-spin text-emerald-400" />
             CONECTANDO AO SUPABASE...
           </div>
         </div>
@@ -841,7 +998,7 @@ export default function App() {
         {toasts.map(t => (
           <div
             key={t.id}
-            className="toast-custom border-l-3 border-t-0 border-b-0 border-r-0 select-all pointer-events-auto"
+            className="toast-custom border-l-4 select-all pointer-events-auto"
             style={{ borderColor: t.color }}
           >
             &gt; {t.message}
@@ -849,88 +1006,99 @@ export default function App() {
         ))}
       </div>
 
-      <div className="w-full max-w-6xl space-y-8">
+      <div className="w-full max-w-6xl space-y-6 relative z-10">
         
-        {/* CABEÇALHO */}
-        <header className="relative flex flex-col md:flex-row justify-between border-b border-terminal-border/40 pb-6 md:items-para-baixo">
-          <div className="space-y-1">
-            <h1 className="text-xl md:text-2xl font-bold tracking-widest uppercase text-white">
-              REPRO // Torre de Comando
-            </h1>
-            <p className="text-[0.6rem] text-terminal-text opacity-40 uppercase tracking-widest">
-              Motor v5.0 // Obsidian Matte & Emerald Line_
+        {/* CABEÇALHO ORGÂNICO */}
+        <header className="relative flex flex-col md:flex-row justify-between border-b border-white/10 pb-5 items-start md:items-end gap-4">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2.5">
+              <div className="w-3 h-3 rounded-full bg-emerald-400 shadow-lg shadow-emerald-500/50 animate-pulse" />
+              <h1 className="text-xl md:text-2xl font-black tracking-widest uppercase text-white font-sans">
+                REPRO <span className="text-emerald-400 font-mono text-base font-normal opacity-80">// Torre de Comando</span>
+              </h1>
+            </div>
+            <p className="text-[0.62rem] text-slate-400 uppercase tracking-wider font-mono flex items-center gap-2">
+              <span>Motor v5.0 Cloud</span>
+              <span className="text-white/20">•</span>
+              <span className="text-emerald-400/90 font-bold">Obsidian Matte & Esmeralda</span>
             </p>
           </div>
           
-          <div className="flex flex-col items-start md:items-para-baixo gap-1 mt-4 md:mt-0 text-[0.55rem] font-medium tracking-widest">
-            <div className="flex flex-wrap items-centralizados gap-2 text-terminal-text opacity-60">
+          <div className="flex flex-col items-start md:items-end gap-2 text-[0.6rem] font-mono tracking-wider">
+            {/* Status Pills */}
+            <div className="flex flex-wrap items-center gap-2">
               {networkStatus === 'online' ? (
-                <span className="text-success font-bold pulse-dot flex items-centralizados gap-1">
-                  <Wifi size={10} />
-                  ● ONLINE
+                <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                  <Wifi size={11} />
+                  <span>ONLINE</span>
                 </span>
               ) : (
-                <span className="text-terminal-text opacity-40 flex items-centralizados gap-1">
-                  <WifiOff size={10} />
-                  ● OFFLINE
+                <span className="text-slate-400 font-bold bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                  <WifiOff size={11} />
+                  <span>OFFLINE</span>
                 </span>
               )}
               
-              <span className="text-terminal-border/50">•</span>
-              
-              <span className="text-terminal-text/80 flex items-centralizados gap-1">
-                <Database size={10} />
-                💾 LOCAL SECURE
+              <span className="text-slate-300 bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                <Database size={11} />
+                <span>IndexedDB</span>
               </span>
-              
-              <span className="text-terminal-border/50">•</span>
               
               {apiUrl ? (
                 unsyncedCount > 0 ? (
-                  <span className="text-warning font-bold animate-pulse flex items-centralizados gap-1">
-                    <Cloud size={10} />
-                    ☁️ {unsyncedCount} RETIDOS
+                  <span className="text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-2.5 py-0.5 rounded-full animate-pulse flex items-center gap-1.5">
+                    <Cloud size={11} />
+                    <span>{unsyncedCount} Pendentes</span>
                   </span>
                 ) : (
-                  <span className="text-success font-bold flex items-centralizados gap-1">
-                    <Cloud size={10} />
-                    ☁️ GOOGLE SHEETS OK
+                  <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                    <Cloud size={11} />
+                    <span>Sheets OK</span>
                   </span>
                 )
               ) : (
-                <span className="text-warning font-bold flex items-centralizados gap-1">
-                  <Cloud size={10} />
-                  ☁️ CONFIGURAR LIGAÇÃO
+                <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                  <Cloud size={11} />
+                  <span>Configurar Sheets</span>
                 </span>
               )}
 
-              <span className="text-terminal-border/50">•</span>
               {user ? (
-                <span className="text-terminal-accent font-bold flex items-centralizados gap-1 animate-pulse">
-                  <Cloud size={10} />
-                  ⚡ POSTGRESQL CLOUD OK
+                <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                  <Cloud size={11} />
+                  <span>PostgreSQL Cloud</span>
                 </span>
               ) : (
-                <span className="text-terminal-text opacity-40 flex items-centralizados gap-1">
-                  <Cloud size={10} />
-                  ⚡ MODALIDADE LOCAL
+                <span className="text-slate-400 bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                  <Cloud size={11} />
+                  <span>Modo Local</span>
                 </span>
               )}
             </div>
 
-            <div className="flex flex-wrap items-centralizados gap-2 mt-1 text-[0.55rem] text-terminal-text opacity-80 font-mono justify-start md:justify-end">
+            {/* Ações de Restauração & Sessão */}
+            <div className="flex flex-wrap items-center gap-2 mt-1 justify-start md:justify-end">
+              <button
+                onClick={handleRestoreSystem}
+                disabled={isSyncing}
+                className="px-2.5 py-1 bg-white/5 border border-white/15 text-slate-200 hover:text-emerald-400 hover:border-emerald-500/40 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm"
+                title="Restaura o sistema, diagnostica base de dados e reconecta sincronização"
+              >
+                <RefreshCw size={11} className={isSyncing ? 'animate-spin text-emerald-400' : ''} />
+                <span>Restaurar Sistema</span>
+              </button>
+
               {user ? (
                 <>
-                  <span>OPERANDO COMO: <strong className="text-white uppercase">{user.user_metadata?.full_name || user.email}</strong></span>
-                  <span className="text-terminal-border/50">•</span>
+                  <span className="text-slate-400">OPERADOR: <strong className="text-white uppercase">{user.user_metadata?.full_name || user.email}</strong></span>
                   <button
                     onClick={async () => {
                       await signOutSupabase();
                       addToast("Sessão terminada.", 'var(--color-info)');
                     }}
-                    className="px-1.5 py-0.5 bg-terminal-accent/10 border border-terminal-accent/30 text-terminal-accent hover:bg-terminal-accent hover:text-black rounded cursor-pointer transition-all"
+                    className="px-2 py-1 bg-white/5 border border-white/10 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 rounded-lg cursor-pointer transition-all"
                   >
-                    SAIR DA CONTA
+                    SAIR
                   </button>
                 </>
               ) : (
@@ -939,72 +1107,86 @@ export default function App() {
                     setIsGuestMode(false);
                     localStorage.setItem('repro_guest_mode', 'false');
                   }}
-                  className="px-2 py-0.5 bg-terminal-accent/15 border border-terminal-accent/40 text-terminal-accent hover:bg-terminal-accent hover:text-black rounded cursor-pointer transition-all uppercase tracking-wider font-bold"
+                  className="px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-black rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold"
                 >
-                  CONECTAR CLOUD SUPABASE ⚡
+                  CONECTAR SUPABASE ⚡
                 </button>
               )}
             </div>
             
-            <div className="text-terminal-text opacity-30 text-para-a-direita">
-              ÚLTIMA SYNC: <span>{lastSyncTime}</span>
-            </div>
-            
-            <div id="visual-cue-save" className="opacity-0 transition-opacity duration-300 text-info text-[0.5rem] font-bold">
-              [ AUTO-SAVE SECURE ]
+            <div className="text-slate-500 text-right text-[0.55rem]">
+              ÚLTIMA SINCRONIZAÇÃO: <span className="text-slate-400 font-bold">{lastSyncTime}</span>
             </div>
           </div>
         </header>
 
-        {/* NAVEGAÇÃO DE ABAS */}
-        <div className="flex border-b border-terminal-border/30 gap-1 pb-px font-mono">
+        {/* NAVEGAÇÃO DE ABAS ORGÂNICA */}
+        <div className="flex border-b border-white/10 gap-2 pb-px font-mono">
           <button
             onClick={() => handleTabChange('painel')}
-            className={`flex items-center gap-2 px-5 py-3 text-xs uppercase tracking-widest font-bold border-b-2 transition-all cursor-pointer ${
+            className={`nav-link flex items-center gap-2 px-5 py-3 text-xs uppercase tracking-wider font-bold rounded-t-xl transition-all cursor-pointer ${
               activeTab === 'painel'
-                ? 'border-terminal-accent text-white bg-terminal-panel/20'
-                : 'border-transparent text-terminal-text opacity-55 hover:opacity-85 hover:bg-terminal-panel/5'
+                ? 'text-white bg-white/5 active'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.02]'
             }`}
           >
-            <LayoutDashboard size={14} className={activeTab === 'painel' ? 'text-terminal-accent' : ''} />
+            <LayoutDashboard size={14} className={activeTab === 'painel' ? 'text-emerald-400' : ''} />
             <span>Painel Operacional</span>
           </button>
           
           <button
             onClick={() => handleTabChange('historico')}
-            className={`flex items-center gap-2 px-5 py-3 text-xs uppercase tracking-widest font-bold border-b-2 transition-all cursor-pointer ${
+            className={`nav-link flex items-center gap-2 px-5 py-3 text-xs uppercase tracking-wider font-bold rounded-t-xl transition-all cursor-pointer ${
               activeTab === 'historico'
-                ? 'border-terminal-accent text-white bg-terminal-panel/20'
-                : 'border-transparent text-terminal-text opacity-55 hover:opacity-85 hover:bg-terminal-panel/5'
+                ? 'text-white bg-white/5 active'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.02]'
             }`}
           >
-            <History size={14} className={activeTab === 'historico' ? 'text-terminal-accent' : ''} />
+            <History size={14} className={activeTab === 'historico' ? 'text-emerald-400' : ''} />
             <span>Histórico de Logs</span>
           </button>
 
           <button
             onClick={() => handleTabChange('followup')}
-            className={`flex items-center gap-2 px-5 py-3 text-xs uppercase tracking-widest font-bold border-b-2 transition-all cursor-pointer ${
+            className={`nav-link flex items-center gap-2 px-5 py-3 text-xs uppercase tracking-wider font-bold rounded-t-xl transition-all cursor-pointer ${
               activeTab === 'followup'
-                ? 'border-terminal-accent text-white bg-terminal-panel/20'
-                : 'border-transparent text-terminal-text opacity-55 hover:opacity-85 hover:bg-terminal-panel/5'
+                ? 'text-white bg-white/5 active'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.02]'
             }`}
           >
-            <CalendarClock size={14} className={activeTab === 'followup' ? 'text-terminal-accent' : ''} />
+            <CalendarClock size={14} className={activeTab === 'followup' ? 'text-emerald-400' : ''} />
             <span>Follow-up Semanal</span>
           </button>
         </div>
 
         {/* CONTEÚDO DINÂMICO DE ACORDO COM A ABA ATIVA */}
         {activeTab === 'painel' && (
-          <div className="space-y-8 animate-fade-in">
+          <div className="space-y-6 animate-fade-in">
+            {/* 0. CONTROLO OPERACIONAL & FILTROS (SETOR 87 SOLO, 88-90 UNIFICADOS, VISÕES DIÁRIA, SEMANAL E MENSAL) */}
+            <TemporalFilterBar
+              activeSectorId={activeSectorId}
+              onSectorChange={(sec) => updateActiveSector(sec, addToast)}
+              period={temporalPeriod}
+              onPeriodChange={setTemporalPeriod}
+              selectedDate={selectedDate}
+              onDateChange={setSelectedDate}
+              selectedWeek={selectedWeek}
+              onWeekChange={setSelectedWeek}
+              selectedMonthKey={selectedMonthKey}
+              onMonthChange={setSelectedMonthKey}
+              availableWeeks={availableWeeks}
+              availableMonths={availableMonths}
+              totalLogsCount={cleanLogs.length}
+              filteredLogsCount={filteredLogs.length}
+            />
+
             {/* 1. MÉTRICAS SESSÃO */}
             <DashboardMetrics logs={filteredLogs} />
 
             {/* 2. DUAL STOPWATCHES & BASE STATUS */}
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
               
-              <div className="lg:col-span-3 space-y-8">
+              <div className="lg:col-span-3 space-y-6">
                 <StopwatchPanel
                   timerState={timerState}
                   colabHistory={colabHistory}
@@ -1014,6 +1196,7 @@ export default function App() {
                   onStopTimer={stopTimer}
                   onCancelTimer={cancelTimer}
                   onSaveTimer={saveTimer}
+                  onSaveManualLog={handleSaveManualLog}
                   activeOperator={activeOperator}
                   onActiveOperatorChange={(op) => {
                     setActiveOperator(op);
@@ -1023,89 +1206,93 @@ export default function App() {
                   onApiUrlChange={handleApiUrlChange}
                 />
                 
-                <section className="p-4 px-6 rounded-sm bg-terminal-panel/30 text-xs">
-                  <div className="font-bold tracking-widest uppercase text-center">
-                    <div className="flex flex-col md:flex-row justify-between w-full opacity-80 gap-2 font-bold text-center">
-                      <span className={timerState.cronometro?.ativo ? (timerState.cronometro?.tipo === 'indireta' ? 'text-warning' : 'text-terminal-accent') : 'text-terminal-text/50'}>
+                <section className="p-3.5 px-5 rounded-xl border border-white/10 bg-black/40 text-xs backdrop-blur-md">
+                  <div className="font-bold tracking-wider uppercase text-center font-mono">
+                    <div className="flex flex-col md:flex-row justify-between items-center w-full opacity-80 gap-2">
+                      <span className={timerState.cronometro?.ativo ? (timerState.cronometro?.tipo === 'indireta' ? 'text-amber-400' : 'text-emerald-400') : 'text-slate-400'}>
                         {timerState.cronometro?.ativo
-                          ? `${timerState.cronometro?.atividade} [${Math.floor((timerState.cronometro?.segundos || 0) / 3600)}h]`
+                          ? `⏱️ EM EXECUÇÃO: ${timerState.cronometro?.atividade} [${Math.floor((timerState.cronometro?.segundos || 0) / 3600)}h ${(Math.floor(((timerState.cronometro?.segundos || 0) % 3600) / 60))}m]`
                           : (timerState.cronometro?.segundos || 0) > 0
-                          ? `PAUSADO [${Math.floor((timerState.cronometro?.segundos || 0) / 3600)}h]`
-                          : 'INATIVO'}
+                          ? `⏸️ PAUSADO: [${Math.floor((timerState.cronometro?.segundos || 0) / 3600)}h]`
+                          : '⚡ CRONÔMETRO PRONTO'}
                       </span>
-                      <span className="hidden md:inline text-terminal-border">•</span>
-                      
+                      <span className="text-slate-500 text-[0.6rem]">
+                        Setor Ativo: <strong>{activeSectorId}</strong>
+                      </span>
                     </div>
                   </div>
                 </section>
               </div>
 
               {/* STATUS DA BASE / SIDEBAR CONFIGS */}
-              <div className="space-y-8">
+              <div className="space-y-6">
                 
-                <section className="border-panel p-6 rounded-sm">
-                  <h2 className="text-xs font-bold text-white uppercase tracking-widest mb-4 border-b border-terminal-border/40 pb-2 opacity-60">
-                    [STATUS DA BASE]
-                  </h2>
-                  <div className="space-y-3.5 text-[0.65rem] tracking-widest">
-                    <div className="flex justify-between">
-                      <span className="text-terminal-text opacity-40">Motor DB:</span>
-                      <span className="text-terminal-accent font-bold">IndexedDB</span>
+                <section className="border-panel p-5 md:p-6 rounded-2xl relative overflow-hidden">
+                  <div className="flex items-center gap-2 mb-4 border-b border-white/10 pb-2.5">
+                    <div className="p-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                      <Database size={13} />
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-terminal-text opacity-40">Registos Totais:</span>
+                    <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                      Status da Base
+                    </h2>
+                  </div>
+
+                  <div className="space-y-3 text-[0.68rem] font-mono">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Armazenamento:</span>
+                      <span className="text-emerald-400 font-bold">IndexedDB</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Total de Registos:</span>
                       <span className="text-white font-bold">{logs.length}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-terminal-text opacity-40">Sincronizados:</span>
-                      <span className="text-success font-bold">{syncedCount}</span>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Sincronizados:</span>
+                      <span className="text-emerald-400 font-bold">{syncedCount}</span>
                     </div>
-                    <div className="flex justify-between border-t border-terminal-border/40 pt-3 mt-1">
-                      <span className="text-warning font-bold">Fila Retida:</span>
-                      <span className="text-warning font-bold animate-pulse">{unsyncedCount}</span>
+                    <div className="flex justify-between items-center border-t border-white/10 pt-2.5">
+                      <span className="text-amber-400 font-bold">Fila Retida:</span>
+                      <span className="text-amber-400 font-black">{unsyncedCount}</span>
                     </div>
                   </div>
                   
-                  <div className="mt-6">
+                  <div className="mt-5">
                     <button
                       onClick={() => sincronizarFila(true)}
                       disabled={isSyncing}
-                      className="w-full btn-term border-terminal-border py-2.5 text-[0.55rem] font-bold uppercase rounded-sm hover:border-terminal-accent/40 cursor-pointer flex justify-centralizado items-centralizados gap-1"
+                      className="w-full btn-primary py-2.5 text-xs font-bold uppercase rounded-xl cursor-pointer flex justify-center items-center gap-2 shadow-lg font-mono disabled:opacity-50"
                     >
-                      <RefreshCw size={10} className={isSyncing ? 'animate-spin text-terminal-accent' : 'text-success'} />
-                      <span>🟢 SYNC ONLINE</span>
+                      <RefreshCw size={13} className={isSyncing ? 'animate-spin' : ''} />
+                      <span>Sincronizar Nuvem</span>
                     </button>
                   </div>
                 </section>
 
-                {/* FOCO SETORIAL */}
-                
-
-                <section className="border-panel p-6 rounded-sm space-y-4">
-                  <h2 className="text-[0.55rem] font-bold text-terminal-text opacity-40 uppercase tracking-widest border-b border-terminal-border/40 pb-2">
-                    BACKUP SEGURO
+                <section className="border-panel p-5 rounded-2xl space-y-3">
+                  <h2 className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider border-b border-white/10 pb-2 font-mono">
+                    Backup & Nuvem
                   </h2>
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       onClick={handleExportBackup}
-                      className="btn-term text-[0.55rem] py-2 uppercase font-bold text-info border-info/10 hover:border-info/40 rounded-sm cursor-pointer"
+                      className="btn-term text-[0.62rem] py-2 uppercase font-bold text-blue-400 border-blue-500/20 hover:border-blue-500/50 rounded-xl cursor-pointer font-mono"
                     >
-                      JSON / CSV
+                      Exportar
                     </button>
                     <button
                       onClick={importarPlanilha}
                       disabled={isImporting}
-                      className="btn-term text-[0.55rem] py-2 uppercase font-bold text-info border-info/10 hover:border-info/40 rounded-sm cursor-pointer flex justify-centralizado items-centralizados gap-1"
+                      className="btn-term text-[0.62rem] py-2 uppercase font-bold text-blue-400 border-blue-500/20 hover:border-blue-500/50 rounded-xl cursor-pointer flex justify-center items-center gap-1 font-mono"
                     >
-                      {isImporting ? 'LENDO...' : 'IMPOR TAR'}
+                      {isImporting ? 'Lendo...' : 'Importar'}
                     </button>
                   </div>
                   <button
                     onClick={importarPlanilha}
                     disabled={isImporting}
-                    className="w-full btn-term border-info text-info py-2 text-[0.55rem] font-bold uppercase rounded-sm hover:bg-info/5 flex justify-centralizado items-centralizados gap-1 cursor-pointer disabled:opacity-50"
+                    className="w-full btn-term border-blue-500/30 text-blue-400 py-2.5 text-[0.62rem] font-bold uppercase rounded-xl hover:bg-blue-500/10 flex justify-center items-center gap-1.5 cursor-pointer disabled:opacity-50 font-mono"
                   >
-                    <span>⬇️ IMPORTAR DA NUVEM</span>
+                    <span>Baixar Dados da Nuvem</span>
                   </button>
                 </section>
 

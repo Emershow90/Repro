@@ -7,6 +7,7 @@ import { Log } from './types';
 import { saveLog, getLogs } from './dbLocal';
 import { saveLogsDirectly, fetchLogsDirectly } from './utils/supabase/client';
 import { getWeekNumber, parseDateString, getDayOfWeekName } from './utils/dateUtils';
+import { normalizeSectorId } from './utils/logUtils';
 
 /**
  * Normalizes any Google Sheets URL (e.g. published web page pubhtml, Apps Script URL, or published CSV)
@@ -153,7 +154,9 @@ export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<bool
     qtdEnderecos: log.volumes,
     horas: log.horas,
     vph: log.vph,
-    tipo: log.tipo || 'direta'
+    tipo: log.tipo || 'direta',
+    horaInicio: log.horaInicio || '',
+    horaFim: log.horaFim || ''
   };
 
   // Tier 1: Try Server-side proxy first if backend API is available
@@ -364,7 +367,31 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
       norm[k.toLowerCase().trim()] = r[k];
     }
 
-    const rawSetor = String(r['Setor'] || r['setor'] || norm['setor'] || '87').trim();
+    // Comprehensive sector extraction from any sheet column variations
+    let foundSector = String(
+      r['Setor'] || r['SETOR'] || r['setor'] || r['Setores'] || r['SETORES'] || r['Sector'] || r['sector'] ||
+      norm['setor'] || norm['setores'] || norm['sector'] || norm['linha'] || norm['área'] || norm['area'] || ''
+    ).trim();
+
+    const rawAtividade = String(r['atividade'] || norm['o que foi feito no repro'] || norm['atividade'] || norm['atividade realizada'] || 'Repro').trim();
+
+    // If no explicit sector column was found, infer from activity or observations
+    if (!foundSector) {
+      const combinedText = `${rawAtividade} ${norm['observações'] || ''} ${norm['detalhes'] || ''} ${norm['comentários'] || ''}`.toLowerCase();
+      if (combinedText.includes('88_89_90') || combinedText.includes('88-90') || combinedText.includes('88, 89') || combinedText.includes('88 e 89')) {
+        foundSector = '88_89_90';
+      } else if (combinedText.includes('88') || combinedText.includes('s88') || combinedText.includes('setor 88')) {
+        foundSector = '88';
+      } else if (combinedText.includes('89') || combinedText.includes('s89') || combinedText.includes('setor 89')) {
+        foundSector = '89';
+      } else if (combinedText.includes('90') || combinedText.includes('s90') || combinedText.includes('setor 90')) {
+        foundSector = '90';
+      } else {
+        foundSector = '87';
+      }
+    }
+
+    const rawSetor = normalizeSectorId(foundSector);
     const rawData = formatDateStr(r['data'] || norm['data'] || norm['data da atividade']);
 
     // Extract week number carefully using dateUtils helper
@@ -384,7 +411,6 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
 
     const calculatedDia = rawData ? getDayOfWeekName(rawData) : String(norm['dia'] || 'Segunda');
 
-    const rawAtividade = String(r['atividade'] || norm['o que foi feito no repro'] || norm['atividade'] || norm['atividade realizada'] || 'Repro').trim();
     const rawColaborador = String(r['colaborador'] || norm['colaborador'] || norm['nome do colaborador'] || '').toUpperCase().trim();
     const rawVolumes = parsePtFloat(r['enderecos'] || r['qtdEnderecos'] || norm['qtd endereços'] || norm['qtd enderecos'] || norm['volumes'] || norm['qtd'] || norm['quantidade de paletes / endereços feitos'] || norm['quantidade de paletes / enderecos feitos'] || 0);
     const rawHoras = parsePtFloat(r['horas'] || norm['horas usadas'] || norm['horas'] || norm['tempo'] || norm['tempo gasto (horas)'] || 0);

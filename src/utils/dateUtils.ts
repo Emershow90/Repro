@@ -96,3 +96,76 @@ export function parseDateString(val: any): Date | null {
 
   return null;
 }
+
+/**
+ * Formats a Date or timestamp to HH:MM string (24-hour).
+ */
+export function formatTimeToHHMM(dateInput?: Date | number | null): string {
+  const d = dateInput instanceof Date ? dateInput : (typeof dateInput === 'number' ? new Date(dateInput) : new Date());
+  if (isNaN(d.getTime())) return '00:00';
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+/**
+ * Calculates duration and decimal hours between horaInicio ('HH:MM') and horaFim ('HH:MM').
+ * Supports overnight shifts if endTime < startTime.
+ */
+export function calculateDurationFromTimes(horaInicio: string, horaFim: string): {
+  totalMinutes: number;
+  decimalHours: number;
+  formattedDuration: string;
+  isValid: boolean;
+  error?: string;
+} {
+  if (!horaInicio || !horaFim) {
+    return { totalMinutes: 0, decimalHours: 0, formattedDuration: '0h 00m', isValid: false, error: 'Horários incompletos' };
+  }
+
+  const [h1, m1] = horaInicio.split(':').map(Number);
+  const [h2, m2] = horaFim.split(':').map(Number);
+
+  if (isNaN(h1) || isNaN(m1) || isNaN(h2) || isNaN(m2)) {
+    return { totalMinutes: 0, decimalHours: 0, formattedDuration: '0h 00m', isValid: false, error: 'Formato inválido (HH:MM)' };
+  }
+
+  const startMins = h1 * 60 + m1;
+  let endMins = h2 * 60 + m2;
+
+  // Handle overnight shift (e.g. 23:00 to 02:00)
+  if (endMins < startMins) {
+    endMins += 24 * 60;
+  }
+
+  const totalMinutes = endMins - startMins;
+  const decimalHours = Number((totalMinutes / 60).toFixed(2));
+  const hrs = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  const formattedDuration = `${hrs}h ${String(mins).padStart(2, '0')}m`;
+
+  return {
+    totalMinutes,
+    decimalHours,
+    formattedDuration,
+    isValid: totalMinutes > 0,
+    error: totalMinutes <= 0 ? 'Hora final deve ser maior que hora inicial' : undefined
+  };
+}
+
+/**
+ * Adds or subtracts minutes from a HH:MM time string.
+ */
+export function adjustTimeMinutes(timeStr: string, minutesToAdd: number): string {
+  if (!timeStr) return '00:00';
+  const [h, m] = timeStr.split(':').map(Number);
+  if (isNaN(h) || isNaN(m)) return '00:00';
+
+  let totalMins = h * 60 + m + minutesToAdd;
+  while (totalMins < 0) totalMins += 24 * 60;
+  totalMins = totalMins % (24 * 60);
+
+  const newH = Math.floor(totalMins / 60);
+  const newM = totalMins % 60;
+  return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+}

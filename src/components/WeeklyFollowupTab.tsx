@@ -6,7 +6,7 @@
 import { useState, useRef, ChangeEvent } from 'react';
 import { Log } from '../types';
 import { useFollowup } from '../hooks/useFollowup';
-import { useSectorStore, VALID_SECTORS } from '../stores/sectorStore';
+import { useSectorStore, VALID_SECTORS, SECTOR_OPTIONS, SECTOR_NAMES } from '../stores/sectorStore';
 import { 
   testApiConnection, 
   syncOfflineQueue, 
@@ -354,7 +354,7 @@ export default function WeeklyFollowupTab({
 
       ctx.fillStyle = '#94a3b8';
       ctx.font = '12px Courier New';
-      const sectorLabel = activeSectorId === 'todos' ? 'TODOS OS SETORES (87, 88, 89, 90)' : `SETOR ${activeSectorId}`;
+      const sectorLabel = SECTOR_NAMES[activeSectorId] ? SECTOR_NAMES[activeSectorId].toUpperCase() : (activeSectorId === 'todos' ? 'TODOS OS SETORES (87-90)' : `SETOR ${activeSectorId}`);
       ctx.fillText(`MÓDULO DE SEGUIMENTO E CONTROLO OPERACIONAL // ${sectorLabel}`, 50, 72);
 
       // Week period block (Right)
@@ -539,39 +539,30 @@ export default function WeeklyFollowupTab({
           </div>
         </div>
 
-        {/* SETOR FILTER BUTTONS (87, 88, 89, 90, TODOS) */}
+        {/* SETOR FILTER BUTTONS (TODOS, 87 SOLO, 88-90 UNIFICADOS) */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-terminal-bg/60 p-2.5 border border-terminal-border/30 rounded-sm">
           <div className="flex items-center gap-2">
             <span className="text-[0.55rem] font-bold uppercase tracking-widest text-terminal-accent font-mono">
               Foco Setorial:
             </span>
             <span className="text-[0.6rem] text-white/70 font-mono">
-              {activeSectorId === 'todos' ? 'Todos os Setores (87, 88, 89, 90)' : `Setor ${activeSectorId}`}
+              {SECTOR_NAMES[activeSectorId] || `Setor ${activeSectorId}`}
             </span>
           </div>
 
           <div className="flex flex-wrap gap-1.5 w-full sm:w-auto">
-            <button
-              onClick={() => updateActiveSector('todos', onAddToast)}
-              className={`px-3 py-1 text-[0.6rem] font-bold font-mono uppercase rounded-sm border transition-all cursor-pointer ${
-                activeSectorId === 'todos'
-                  ? 'bg-terminal-accent text-black border-terminal-accent font-black shadow-sm'
-                  : 'bg-terminal-panel/40 border-terminal-border/60 text-terminal-text hover:text-white'
-              }`}
-            >
-              Todos (87-90)
-            </button>
-            {VALID_SECTORS.map(sec => (
+            {SECTOR_OPTIONS.map(opt => (
               <button
-                key={sec}
-                onClick={() => updateActiveSector(sec, onAddToast)}
+                key={opt.id}
+                onClick={() => updateActiveSector(opt.id, onAddToast)}
                 className={`px-3 py-1 text-[0.6rem] font-bold font-mono uppercase rounded-sm border transition-all cursor-pointer ${
-                  activeSectorId === sec
+                  activeSectorId === opt.id
                     ? 'bg-terminal-accent text-black border-terminal-accent font-black shadow-sm'
                     : 'bg-terminal-panel/40 border-terminal-border/60 text-terminal-text hover:text-white'
                 }`}
+                title={opt.description}
               >
-                Setor {sec}
+                {opt.shortLabel}
               </button>
             ))}
           </div>

@@ -39,6 +39,8 @@ import {
   getDayOfWeekName, 
   DIAS_DA_SEMANA as diasDaSemana 
 } from '../utils/dateUtils';
+import { useSectorStore, SECTOR_OPTIONS, SECTOR_NAMES } from '../stores/sectorStore';
+import { deduplicateLogs, isLogMatchingSector, normalizeSectorId, inferSectorFromLog } from '../utils/logUtils';
 
 interface HistoryTabProps {
   logs: Log[];
@@ -66,7 +68,8 @@ export default function HistoryTab({
   onRetrySync,
   userUid
 }: HistoryTabProps) {
-  // Advanced filters
+  // Sector and advanced filters
+  const { activeSectorId, updateActiveSector } = useSectorStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedActivity, setSelectedActivity] = useState('');
   const [selectedWeek, setSelectedWeek] = useState('');
@@ -94,12 +97,23 @@ export default function HistoryTab({
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
 
-  // Dropdown options lists derived dynamically
-  const uniqueActivities = Array.from(new Set(logs.map(l => l.atividade))).sort();
-  const uniqueWeeks = Array.from(new Set(logs.map(l => l.semana))).sort((a, b) => b - a);
+  // 1. Clean deduplicated logs
+  const cleanLogs = React.useMemo(() => {
+    return deduplicateLogs(logs);
+  }, [logs]);
+
+  // Dropdown options lists derived dynamically from clean logs
+  const uniqueActivities = Array.from(new Set<string>(cleanLogs.map(l => String(l.atividade)))).sort();
+  const uniqueWeeks = Array.from(new Set<number>(cleanLogs.map(l => Number(l.semana)))).sort((a, b) => b - a);
 
   // --- FILTERS LOGIC ---
-  const filteredLogs = logs.filter(log => {
+  const filteredLogs = cleanLogs.filter(log => {
+    // 0. Setor Filter
+    if (activeSectorId && activeSectorId !== 'todos') {
+      if (!isLogMatchingSector(log.setor, activeSectorId, log.atividade)) {
+        return false;
+      }
+    }
     // 1. Colaborador Search
     if (searchTerm && !log.colaborador.toLowerCase().includes(searchTerm.toLowerCase())) {
       return false;
@@ -232,7 +246,7 @@ export default function HistoryTab({
 
           // Identify columns dynamically mapping standard Portuguese headers from "Controle de horas - Repro"
           const rawData = normalizedRow['Data'] || normalizedRow['DATA'] || normalizedRow['Date'] || normalizedRow['date'] || '';
-          const rawSetor = normalizedRow['Setor'] || normalizedRow['SETOR'] || normalizedRow['setor'] || '87';
+          let foundSector = normalizedRow['Setor'] || normalizedRow['SETOR'] || normalizedRow['setor'] || normalizedRow['Setores'] || normalizedRow['SETORES'] || normalizedRow['Sector'] || normalizedRow['sector'] || normalizedRow['Linha'] || normalizedRow['Área'] || normalizedRow['Area'] || '';
           const rawColaborador = normalizedRow['Colaborador'] || normalizedRow['COLABORADOR'] || normalizedRow['Nome'] || normalizedRow['nome'] || normalizedRow['Name'] || '';
           const rawAtividade = normalizedRow['O que foi feito no Repro'] || normalizedRow['Atividade'] || normalizedRow['ATIVIDADE'] || normalizedRow['Operação'] || normalizedRow['Atividade no Repro'] || 'Repro';
           const rawVolumes = normalizedRow['QTD endereços'] || normalizedRow['Quantidade de Endereços'] || normalizedRow['Quantidade de Enderecos'] || normalizedRow['Endereços'] || normalizedRow['Enderecos'] || normalizedRow['Volumes'] || normalizedRow['VOLUMES'] || normalizedRow['Qtd'] || normalizedRow['QTD'] || 0;
@@ -243,6 +257,12 @@ export default function HistoryTab({
           const colaborador = String(rawColaborador).toUpperCase().trim();
           const atividade = String(rawAtividade).trim();
           
+          // Infer sector if not present
+          if (!foundSector) {
+            foundSector = inferSectorFromLog({ atividade });
+          }
+          const setorStr = normalizeSectorId(foundSector) || '87';
+
           // Parse Portuguese number formatting (e.g. "3,00" -> 3.00)
           const parsePtFloat = (v: any) => {
             if (typeof v === 'number') return v;
@@ -253,7 +273,6 @@ export default function HistoryTab({
 
           const volumes = parsePtFloat(rawVolumes);
           const horas = parsePtFloat(rawHoras);
-          const setorStr = String(rawSetor).trim() || '87';
 
           let parsedDateObj = parseDateString(rawData);
           
@@ -267,22 +286,13 @@ export default function HistoryTab({
             continue;
           }
 
-          const validSectors = ['87', '88', '89', '90'];
-          if (!setorStr) {
-            parsedRows.push({
-              raw: row,
-              log: null,
-              status: 'invalid',
-              reason: 'Setor obrigatório em falta.'
-            });
-            continue;
-          }
+          const validSectors = ['87', '88', '89', '90', '88_89_90', '88-90', 'todos'];
           if (!validSectors.includes(setorStr)) {
             parsedRows.push({
               raw: row,
               log: null,
               status: 'invalid',
-              reason: `Setor inválido: "${setorStr}". Valores permitidos: 87, 88, 89, 90.`
+              reason: `Setor inválido: "${setorStr}". Valores permitidos: 87, 88, 89, 90 ou Unificados.`
             });
             continue;
           }
@@ -1028,6 +1038,35 @@ export default function HistoryTab({
 
       {/* 3. FILTROS AVANÇADOS INTERATIVOS */}
       <section className="bg-terminal-panel/5 border border-terminal-border/20 p-4 rounded-sm space-y-4">
+        {/* Sector Quick Filter Pills */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-3 border-b border-terminal-border/20 font-mono">
+          <div className="flex items-center gap-2">
+            <span className="text-[0.55rem] font-bold uppercase tracking-wider text-terminal-accent">
+              Setor Selecionado:
+            </span>
+            <span className="text-[0.6rem] text-white font-bold">
+              {SECTOR_NAMES[activeSectorId] || `Setor ${activeSectorId}`}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5 w-full sm:w-auto">
+            {SECTOR_OPTIONS.map(opt => (
+              <button
+                key={opt.id}
+                onClick={() => { updateActiveSector(opt.id, onAddToast); setCurrentPage(1); }}
+                className={`px-2.5 py-1 text-[0.6rem] font-bold font-mono uppercase rounded-sm border transition-all cursor-pointer ${
+                  activeSectorId === opt.id
+                    ? 'bg-terminal-accent text-black border-terminal-accent font-black shadow-sm'
+                    : 'bg-terminal-panel/40 border-terminal-border/60 text-terminal-text hover:text-white'
+                }`}
+                title={opt.description}
+              >
+                {opt.shortLabel}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
           {/* Colaborador */}
           <div className="space-y-1">
@@ -1113,8 +1152,8 @@ export default function HistoryTab({
         </div>
 
         {/* Clear filters shortcut */}
-        {(searchTerm || selectedActivity || selectedWeek || startDate || endDate) && (
-          <div className="flex justify-end">
+        {(searchTerm || selectedActivity || selectedWeek || startDate || endDate || activeSectorId !== 'todos') && (
+          <div className="flex justify-end gap-3">
             <button
               onClick={() => {
                 setSearchTerm('');
@@ -1122,6 +1161,7 @@ export default function HistoryTab({
                 setSelectedWeek('');
                 setStartDate('');
                 setEndDate('');
+                updateActiveSector('todos');
                 setCurrentPage(1);
               }}
               className="text-[0.55rem] font-bold uppercase tracking-wider text-danger hover:underline cursor-pointer"
@@ -1144,6 +1184,7 @@ export default function HistoryTab({
                 >
                   Data {sortField === 'timestamp' && (sortAsc ? '▲' : '▼')}
                 </th>
+                <th className="p-3 font-semibold text-center">Setor</th>
                 <th className="p-3 font-semibold text-center">Nuvem</th>
                 <th className="p-3 font-semibold">Dia da Semana</th>
                 <th className="p-3 font-semibold text-center">Semana</th>
@@ -1184,6 +1225,15 @@ export default function HistoryTab({
                   <tr key={log.id} className={`${rowStyle} transition-colors`}>
                     <td className="p-3 font-mono text-center">{log.data}</td>
                     <td className="p-3 text-center">
+                      <span className="text-[0.6rem] font-bold px-1.5 py-0.5 bg-white/5 border border-white/10 rounded-sm font-mono text-slate-300">
+                        {(() => {
+                          const s = inferSectorFromLog(log);
+                          if (s === '88_89_90') return 'S88-90';
+                          return `S${s}`;
+                        })()}
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
                       {log.synced ? (
                         <span className="text-terminal-accent text-[0.6rem] font-bold px-1.5 py-0.5 bg-terminal-accent/10 border border-terminal-accent/30 rounded-sm">
                           ✓ Nuvem
@@ -1208,7 +1258,12 @@ export default function HistoryTab({
                       {isIndireta ? '-' : log.volumes.toLocaleString('pt-PT')}
                     </td>
                     <td className={`p-3 text-right font-mono font-bold ${isFailed ? 'text-danger' : 'text-warning'}`}>
-                      {log.horas.toFixed(2)}h
+                      <div>{log.horas.toFixed(2)}h</div>
+                      {log.horaInicio && log.horaFim && (
+                        <div className="text-[0.55rem] font-normal opacity-70 text-terminal-text font-mono">
+                          {log.horaInicio} - {log.horaFim}
+                        </div>
+                      )}
                     </td>
                     <td className={`p-3 text-right font-mono font-bold ${isFailed ? 'text-danger' : 'text-terminal-accent'}`}>
                       {isIndireta ? (
@@ -1252,7 +1307,7 @@ export default function HistoryTab({
 
               {sortedLogs.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="text-center p-12 text-terminal-text opacity-40 uppercase tracking-widest text-[0.65rem] font-mono">
+                  <td colSpan={12} className="text-center p-12 text-terminal-text opacity-40 uppercase tracking-widest text-[0.65rem] font-mono">
                     Nenhum registo de atividades localizado com os filtros indicados.
                   </td>
                 </tr>
