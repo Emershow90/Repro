@@ -6,14 +6,16 @@ export interface Toast {
   color: string;
 }
 
+export type TabType = 'cronometro' | 'ruas' | 'painel' | 'historico' | 'followup';
+
 interface UIState {
-  activeTab: 'painel' | 'historico' | 'followup';
+  activeTab: TabType;
   screensaverEnabled: boolean;
   screensaverTimeout: number;
   screensaverActive: boolean;
   toasts: Toast[];
   supabaseLoading: boolean;
-  handleTabChange: (tab: 'painel' | 'historico' | 'followup') => void;
+  handleTabChange: (tab: TabType) => void;
   setScreensaverActive: (active: boolean) => void;
   updateScreensaverEnabled: (enabled: boolean, addToast?: (msg: string, col?: string) => void) => void;
   updateScreensaverTimeout: (timeout: number, addToast?: (msg: string, col?: string) => void) => void;
@@ -24,9 +26,11 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set) => ({
   activeTab: (() => {
-    const saved = localStorage.getItem('repro_active_tab');
-    if (saved === 'painel' || saved === 'historico' || saved === 'followup') return saved;
-    return 'painel';
+    const saved = localStorage.getItem('repro_active_tab') as TabType;
+    if (saved === 'cronometro' || saved === 'ruas' || saved === 'painel' || saved === 'historico' || saved === 'followup') {
+      return saved;
+    }
+    return 'cronometro';
   })(),
   screensaverEnabled: localStorage.getItem('repro_screensaver_enabled') !== 'false',
   screensaverTimeout: (() => {

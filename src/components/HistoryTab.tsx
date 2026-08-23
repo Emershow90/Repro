@@ -1247,15 +1247,33 @@ export default function HistoryTab({
                     <td className="p-3 opacity-60 font-mono text-center">{log.dia}</td>
                     <td className="p-3 opacity-60 font-mono text-center">Semana {log.semana}</td>
                     <td className="p-3">
-                      <span className={`px-2 py-0.5 rounded-sm text-[0.6rem] font-bold uppercase border ${
-                        isIndireta ? 'border-warning/20 text-warning bg-warning/5' : 'border-terminal-accent/20 text-terminal-accent bg-terminal-accent/5'
-                      }`}>
-                        {log.atividade}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        <span className={`px-2 py-0.5 rounded-sm text-[0.6rem] font-bold uppercase border w-fit ${
+                          isIndireta ? 'border-warning/20 text-warning bg-warning/5' : 'border-terminal-accent/20 text-terminal-accent bg-terminal-accent/5'
+                        }`}>
+                          {log.atividade}
+                        </span>
+                        {log.rua && (
+                          <span className="text-[0.55rem] font-mono text-cyan-400 bg-cyan-500/10 px-1.5 py-0.2 rounded border border-cyan-500/20 w-fit">
+                            📍 {log.rua}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="p-3 font-bold uppercase text-white">{log.colaborador}</td>
                     <td className="p-3 text-right font-mono text-white">
-                      {isIndireta ? '-' : log.volumes.toLocaleString('pt-PT')}
+                      {isIndireta ? (
+                        '-'
+                      ) : (
+                        <div>
+                          <div>{log.volumes.toLocaleString('pt-PT')} vol</div>
+                          {log.enderecos && log.enderecos > 0 && (
+                            <div className="text-[0.58rem] text-emerald-400 font-mono">
+                              {log.enderecos} end ({log.mediaPorEndereco || (log.volumes / log.enderecos).toFixed(1)} v/e)
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className={`p-3 text-right font-mono font-bold ${isFailed ? 'text-danger' : 'text-warning'}`}>
                       <div>{log.horas.toFixed(2)}h</div>
@@ -1269,7 +1287,14 @@ export default function HistoryTab({
                       {isIndireta ? (
                         <span className="text-terminal-text opacity-30 text-[0.6rem]">INDIRETA</span>
                       ) : (
-                        `${log.vph} VPH`
+                        <div>
+                          <div>{log.vph} VPH</div>
+                          {log.eph && (
+                            <div className="text-[0.58rem] text-cyan-400 font-normal">
+                              {log.eph} EPH
+                            </div>
+                          )}
+                        </div>
                       )}
                     </td>
                     {/* Quick Daily PDF Action */}

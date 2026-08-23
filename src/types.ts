@@ -19,6 +19,10 @@ export interface Log {
   setor?: string;
   horaInicio?: string;
   horaFim?: string;
+  rua?: string;
+  enderecos?: number;
+  mediaPorEndereco?: number;
+  eph?: string;
 }
 
 export interface StopwatchState {

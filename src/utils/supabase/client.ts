@@ -47,6 +47,33 @@ export async function signInWithGoogle() {
   return data;
 }
 
+export async function signInWithEmailPassword(email: string, password: string) {
+  const client = getSupabase();
+  if (!client) throw new Error("Supabase client não está inicializado.");
+  const { data, error } = await client.auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function signUpWithEmailPassword(email: string, password: string, fullName?: string) {
+  const client = getSupabase();
+  if (!client) throw new Error("Supabase client não está inicializado.");
+  const { data, error } = await client.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        full_name: fullName || email.split('@')[0],
+      }
+    }
+  });
+  if (error) throw error;
+  return data;
+}
+
 export async function signOutSupabase() {
   const client = getSupabase();
   if (client) {

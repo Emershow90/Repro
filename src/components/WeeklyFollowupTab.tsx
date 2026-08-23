@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, ChangeEvent } from 'react';
+import { useState, useRef, useMemo, ChangeEvent } from 'react';
 import { Log } from '../types';
 import { useFollowup } from '../hooks/useFollowup';
 import { useSectorStore, VALID_SECTORS, SECTOR_OPTIONS, SECTOR_NAMES } from '../stores/sectorStore';
@@ -28,6 +28,7 @@ import {
   ListOrdered,
   RefreshCw,
   Link as LinkIcon,
+  MapPin,
   ExternalLink,
   FileSpreadsheet,
   FileText,
@@ -84,6 +85,35 @@ export default function WeeklyFollowupTab({
     monthlyConsolidation,
     weekPeriodStr
   } = useFollowup(logs, selectedWeek, activeSectorId);
+
+  // Consolidação de Reabastecimento por Rua na semana selecionada
+  const streetFollowupSummary = useMemo(() => {
+    const streetLogs = weekLogs.filter(l => Boolean(l.rua || l.atividade.toUpperCase().includes('REABASTECIMENTO') || l.atividade.toUpperCase().includes('RUA')));
+    
+    const map = new Map<string, { rua: string; enderecos: number; volumes: number; horas: number; count: number }>();
+    for (const l of streetLogs) {
+      const rua = (l.rua || (() => {
+        const m = l.atividade.match(/RUA\s*[0-9A-Z_]+/i);
+        return m ? m[0].toUpperCase() : 'OUTRA RUA';
+      })()).toUpperCase();
+
+      const curr = map.get(rua) || { rua, enderecos: 0, volumes: 0, horas: 0, count: 0 };
+      const end = l.enderecos || (l.volumes > 0 ? Math.max(1, Math.round(l.volumes / 5)) : 1);
+      curr.enderecos += end;
+      curr.volumes += l.volumes;
+      curr.horas += l.horas;
+      curr.count += 1;
+      map.set(rua, curr);
+    }
+
+    return Array.from(map.values()).map(item => ({
+      ...item,
+      mediaPorEnd: item.enderecos > 0 ? (item.volumes / item.enderecos).toFixed(1) : '0.0',
+      eph: item.horas > 0 ? (item.enderecos / item.horas).toFixed(1) : '0.0',
+      vph: item.horas > 0 ? (item.volumes / item.horas).toFixed(1) : '0.0',
+      minPorEnd: item.enderecos > 0 && item.horas > 0 ? ((item.horas * 60) / item.enderecos).toFixed(1) : '0.0'
+    })).sort((a, b) => parseFloat(b.vph) - parseFloat(a.vph));
+  }, [weekLogs]);
 
   // --- CONNECTIVITY ACTIONS ---
   const handleTestConnection = async () => {
@@ -862,6 +892,57 @@ export default function WeeklyFollowupTab({
           </div>
         </div>
       </div>
+
+      {/* 4.1. CONSOLIDAÇÃO DE REABASTECIMENTO POR RUA */}
+      {streetFollowupSummary.length > 0 && (
+        <div className="border border-terminal-border/30 p-5 rounded-sm bg-terminal-panel/10 space-y-4">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-terminal-border/30 pb-2">
+            <h3 className="text-xs font-bold text-white uppercase tracking-widest flex items-center gap-1.5 font-mono">
+              <MapPin size={13} className="text-emerald-400" />
+              <span>Desempenho de Reabastecimento por Rua (Semana {selectedWeek})</span>
+            </h3>
+            <span className="text-[0.6rem] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+              {streetFollowupSummary.length} Ruas Atendidas
+            </span>
+          </div>
+
+          <div className="overflow-x-auto scrollbar-thin">
+            <table className="w-full text-left text-xs whitespace-nowrap font-mono">
+              <thead>
+                <tr className="text-[0.55rem] uppercase text-terminal-text opacity-50 border-b border-terminal-border/20">
+                  <th className="pb-2 font-medium">Rua / Corredor</th>
+                  <th className="pb-2 text-center font-medium">Lançamentos</th>
+                  <th className="pb-2 text-right font-medium text-cyan-400">Endereços</th>
+                  <th className="pb-2 text-right font-medium">Volumes Totais</th>
+                  <th className="pb-2 text-right font-medium text-warning">Horas</th>
+                  <th className="pb-2 text-right font-medium text-emerald-400">Média (Vol/End)</th>
+                  <th className="pb-2 text-right font-medium text-cyan-400">EPH (End/h)</th>
+                  <th className="pb-2 text-right font-medium text-terminal-accent">VPH (Vol/h)</th>
+                  <th className="pb-2 text-right font-medium text-amber-400">Tempo Médio/End</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-terminal-border/10 text-[0.65rem] text-terminal-text/80">
+                {streetFollowupSummary.map((st, idx) => (
+                  <tr key={idx} className="hover:bg-terminal-bg/50">
+                    <td className="py-2.5 font-bold uppercase text-white flex items-center gap-2">
+                      <span className="text-[0.65rem] font-bold text-terminal-text/40">#{idx + 1}</span>
+                      <span className="text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">{st.rua}</span>
+                    </td>
+                    <td className="py-2.5 text-center text-slate-400">{st.count}x</td>
+                    <td className="py-2.5 text-right text-cyan-400 font-bold">{st.enderecos}</td>
+                    <td className="py-2.5 text-right text-white font-bold">{st.volumes.toLocaleString('pt-PT')}</td>
+                    <td className="py-2.5 text-right font-bold text-warning">{st.horas.toFixed(2)}h</td>
+                    <td className="py-2.5 text-right font-bold text-emerald-400">{st.mediaPorEnd} <span className="text-[0.55rem] opacity-60">v/e</span></td>
+                    <td className="py-2.5 text-right text-cyan-400 font-bold">{st.eph}</td>
+                    <td className="py-2.5 text-right font-bold text-terminal-accent">{st.vph}</td>
+                    <td className="py-2.5 text-right text-amber-400">{st.minPorEnd} min</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* 5. HISTORICAL CONSOLIDATION BY WEEK & MONTH */}
       <section className="bg-terminal-panel/5 border border-terminal-border/20 p-5 rounded-sm space-y-6">

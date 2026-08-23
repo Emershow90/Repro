@@ -89,9 +89,10 @@ export function deduplicateLogs(logs: Log[]): Log[] {
     const tipoNorm = log.tipo || 'direta';
     const hIniNorm = (log.horaInicio || '').trim();
     const hFimNorm = (log.horaFim || '').trim();
+    const ruaNorm = (log.rua || '').trim().toUpperCase();
 
     // Composite signature for deduplication
-    const signature = `${dataNorm}|${colabNorm}|${ativNorm}|${setorNorm}|${volNorm}|${hrsNorm}|${tipoNorm}|${hIniNorm}|${hFimNorm}`;
+    const signature = `${dataNorm}|${colabNorm}|${ativNorm}|${setorNorm}|${volNorm}|${hrsNorm}|${tipoNorm}|${hIniNorm}|${hFimNorm}|${ruaNorm}`;
 
     if (log.id && seenIds.has(log.id)) {
       continue; // Skip duplicate ID

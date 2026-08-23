@@ -35,6 +35,8 @@ import { useSectorStore } from './stores/sectorStore';
 import { useCollaboratorStore } from './stores/collaboratorStore';
 import { useUIStore } from './stores/uiStore';
 import { useHistoryStore } from './stores/historyStore';
+import { TabType } from './stores/uiStore';
+import AuthLoginCard from './components/AuthLoginCard';
 import DashboardMetrics from './components/DashboardMetrics';
 import TemporalFilterBar from './components/TemporalFilterBar';
 import StopwatchPanel from './components/StopwatchPanel';
@@ -44,6 +46,8 @@ import VphChart from './components/VphChart';
 import BreakdownPanel from './components/BreakdownPanel';
 import HistoryTab from './components/HistoryTab';
 import WeeklyFollowupTab from './components/WeeklyFollowupTab';
+import StreetReplenishmentModule from './components/StreetReplenishmentModule';
+import ErrorBoundary from './components/ErrorBoundary';
 import Screensaver from './components/Screensaver';
 import FormModalFloatingButton from './components/FormModalFloatingButton';
 import { 
@@ -63,7 +67,9 @@ import {
   Monitor, 
   Filter, 
   Settings, 
-  Edit3 
+  Edit3,
+  MapPin,
+  Clock
 } from 'lucide-react';
 
 const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
@@ -142,6 +148,7 @@ export default function App() {
     rascunhoColab: '',
     rascunhoVol: ''
   });
+  const [panelSubTab, setPanelSubTab] = useState<'repro' | 'ruas'>('repro');
   const [inputOpen, setInputOpen] = useState(false);
   const [ticks, setTicks] = useState(0);
 
@@ -590,6 +597,23 @@ export default function App() {
     }
   };
 
+  const handleSaveStreetLog = async (newLog: Log) => {
+    await saveLog(newLog);
+    setLogs(prev => [newLog, ...prev]);
+    addToast(`Apontamento da ${newLog.rua || 'Rua'} guardado com sucesso!`, 'var(--color-success)');
+    
+    if (apiUrl && networkStatus === 'online') {
+      postLogWithRetry(apiUrl, newLog, user?.id || user?.uid).then(async (success) => {
+        if (success) {
+          const syncedLog = { ...newLog, synced: true };
+          await saveLog(syncedLog);
+          setLogs(prev => prev.map(l => l.id === newLog.id ? syncedLog : l));
+          setLastSyncTime(new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+      }).catch(err => console.error("Cloud post error:", err));
+    }
+  };
+
   const startTimer = (activity: string, btnId: string, tipo: 'direta' | 'indireta') => {
     setTimerState(prev => {
       const updated = { ...prev };
@@ -872,92 +896,17 @@ export default function App() {
   if (loadingUser) {
     return (
       <div className="terminal-root min-h-screen flex flex-col items-center justify-center p-4">
-        <div className="flex flex-col items-center space-y-4 max-w-sm text-center border border-terminal-border/40 p-8 rounded-lg bg-terminal-panel/45 shadow-2xl">
-          <Loader2 className="animate-spin text-terminal-accent" size={36} />
-          <p className="font-mono text-xs text-terminal-text tracking-widest uppercase animate-pulse">
-            Sincronizando Sistema Cloud...
+        <div className="flex flex-col items-center space-y-4 max-w-sm text-center border border-white/10 p-8 rounded-2xl bg-slate-900/90 shadow-2xl backdrop-blur-xl">
+          <Loader2 className="animate-spin text-emerald-400" size={36} />
+          <p className="font-mono text-xs text-slate-300 tracking-widest uppercase animate-pulse">
+            Carregando Sistema Operacional...
           </p>
         </div>
       </div>
     );
   }
 
-  if (!user && !isGuestMode) {
-    return (
-      <div className="terminal-root min-h-screen flex flex-col items-center justify-center p-4">
-        {/* Toast Alert stack overlay inside login */}
-        <div className="fixed bottom-6 right-6 flex flex-col gap-2 z-50 pointer-events-none">
-          {toasts.map(t => (
-            <div
-              key={t.id}
-              className="toast-custom border-l-3 border-t-0 border-b-0 border-r-0 select-all pointer-events-auto"
-              style={{ borderColor: t.color }}
-            >
-              &gt; {t.message}
-            </div>
-          ))}
-        </div>
-
-        <div className="w-full max-w-md border border-terminal-border/40 p-8 rounded shadow-2xl relative space-y-8 bg-terminal-panel/90">
-          <div className="text-center space-y-2">
-            <h1 className="text-xl md:text-2xl font-bold tracking-widest uppercase text-white">
-              REPRO // Terminal REPRO
-            </h1>
-            <p className="text-[0.6rem] text-terminal-accent uppercase tracking-widest font-mono">
-              Sincronização em Tempo Real na Nuvem (PostgreSQL)
-            </p>
-          </div>
-
-          <div className="border border-terminal-border/20 p-4 rounded bg-black/40 space-y-3 font-mono text-[0.65rem] text-terminal-text">
-            <p className="text-white border-b border-terminal-border/20 pb-1 flex items-center gap-1.5 font-bold">
-              <Shield size={12} className="text-terminal-accent animate-pulse" />
-              BENEFÍCIOS DA SESSÃO EM NUVEM
-            </p>
-            <ul className="list-disc pl-4 space-y-1.5 opacity-80">
-              <li>Sincronização Instantânea: Registros unificados em tempo real.</li>
-              <li>Persistência Segura: Salvaguarda de dados na nuvem Supabase.</li>
-              <li>Multi-dispositivo: Opere a torre de comando de qualquer ecrã.</li>
-              <li>Autenticação Google / Supabase: Login seguro e único.</li>
-            </ul>
-          </div>
-
-          <div className="space-y-3">
-            <button
-              onClick={async () => {
-                try {
-                  await signInWithGoogle();
-                } catch (err) {
-                  console.error("Sign in failed:", err);
-                  addToast("Falha no login com Google.", "var(--color-danger)");
-                }
-              }}
-              className="w-full py-3.5 bg-terminal-accent text-black font-bold text-xs uppercase tracking-widest rounded flex items-center justify-center gap-2 cursor-pointer hover:bg-transparent hover:text-terminal-accent border border-terminal-accent transition-all shadow-lg active:scale-95 font-mono"
-            >
-              <LogIn size={16} />
-              Entrar com Google / Supabase
-            </button>
-
-            <button
-              onClick={() => {
-                setIsGuestMode(true);
-                localStorage.setItem('repro_guest_mode', 'true');
-                addToast("Operando em Modalidade Local (Convidado)", "var(--color-info)");
-              }}
-              className="w-full py-3 border border-terminal-border/60 text-terminal-text hover:text-white hover:border-terminal-accent font-semibold text-xs uppercase tracking-widest rounded flex items-center justify-center gap-2 cursor-pointer transition-all font-mono"
-            >
-              Continuar como Convidado (Local Only)
-            </button>
-          </div>
-
-          <div className="text-center font-mono">
-            <span className="text-[0.55rem] text-terminal-text opacity-30 uppercase tracking-wider">
-              Versão 5.0 Cloud // Powered by PostgreSQL & Firebase Auth
-            </span>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const isAuthUnlocked = Boolean(user || isGuestMode);
 
   return (
     <div className="terminal-root p-4 md:p-8 flex flex-col items-center relative overflow-hidden">
@@ -1120,72 +1069,138 @@ export default function App() {
           </div>
         </header>
 
-        {/* NAVEGAÇÃO DE ABAS ORGÂNICA */}
-        <div className="flex border-b border-white/10 gap-2 pb-px font-mono">
+        {/* NAVEGAÇÃO DE ABAS RESPONSIVA (PC, MOBILE & PDT ZEBRA) */}
+        <nav 
+          id="main-app-navigation"
+          aria-label="Navegação Principal"
+          className="flex items-center gap-1.5 md:gap-2 overflow-x-auto no-scrollbar p-1.5 bg-black/50 rounded-2xl border border-white/10 backdrop-blur-md"
+        >
+          {/* 1. CRONÔMETRO (SEM LOGIN - LIVRE PARA PDT / MOBILE / PC) */}
           <button
-            onClick={() => handleTabChange('painel')}
-            className={`nav-link flex items-center gap-2 px-5 py-3 text-xs uppercase tracking-wider font-bold rounded-t-xl transition-all cursor-pointer ${
-              activeTab === 'painel'
-                ? 'text-white bg-white/5 active'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.02]'
+            type="button"
+            id="tab-btn-cronometro"
+            onClick={() => handleTabChange('cronometro')}
+            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'cronometro'
+                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
             }`}
           >
-            <LayoutDashboard size={14} className={activeTab === 'painel' ? 'text-emerald-400' : ''} />
-            <span>Painel Operacional</span>
-          </button>
-          
-          <button
-            onClick={() => handleTabChange('historico')}
-            className={`nav-link flex items-center gap-2 px-5 py-3 text-xs uppercase tracking-wider font-bold rounded-t-xl transition-all cursor-pointer ${
-              activeTab === 'historico'
-                ? 'text-white bg-white/5 active'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.02]'
-            }`}
-          >
-            <History size={14} className={activeTab === 'historico' ? 'text-emerald-400' : ''} />
-            <span>Histórico de Logs</span>
+            <Clock size={15} className={activeTab === 'cronometro' ? 'text-black' : 'text-emerald-400'} />
+            <span>Cronômetro</span>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+              activeTab === 'cronometro'
+                ? 'bg-black/20 text-black'
+                : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+            }`}>
+              Livre
+            </span>
           </button>
 
+          {/* 2. REABASTECIMENTO POR RUA (SEM LOGIN - LIVRE PARA PDT / MOBILE / PC) */}
           <button
-            onClick={() => handleTabChange('followup')}
-            className={`nav-link flex items-center gap-2 px-5 py-3 text-xs uppercase tracking-wider font-bold rounded-t-xl transition-all cursor-pointer ${
-              activeTab === 'followup'
-                ? 'text-white bg-white/5 active'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.02]'
+            type="button"
+            id="tab-btn-ruas"
+            onClick={() => handleTabChange('ruas')}
+            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'ruas'
+                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
             }`}
           >
-            <CalendarClock size={14} className={activeTab === 'followup' ? 'text-emerald-400' : ''} />
-            <span>Follow-up Semanal</span>
+            <MapPin size={15} className={activeTab === 'ruas' ? 'text-black' : 'text-emerald-400'} />
+            <span>Reabastecimento por Rua</span>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+              activeTab === 'ruas'
+                ? 'bg-black/20 text-black'
+                : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+            }`}>
+              Livre
+            </span>
           </button>
-        </div>
+
+          {/* SEPARADOR VERTICAL SUTIL */}
+          <div className="h-6 w-px bg-white/10 mx-1 shrink-0" />
+
+          {/* 3. PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
+          <button
+            type="button"
+            id="tab-btn-painel"
+            onClick={() => handleTabChange('painel')}
+            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'painel'
+                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
+            }`}
+          >
+            <LayoutDashboard size={15} className={activeTab === 'painel' ? 'text-black' : 'text-emerald-400'} />
+            <span>Painel Operacional</span>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+              activeTab === 'painel'
+                ? 'bg-black/20 text-black'
+                : isAuthUnlocked
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+            }`}>
+              {isAuthUnlocked ? 'Liberado' : 'Login'}
+            </span>
+          </button>
+
+          {/* 4. HISTÓRICO DE LOGS (PROTEGIDO POR LOGIN) */}
+          <button
+            type="button"
+            id="tab-btn-historico"
+            onClick={() => handleTabChange('historico')}
+            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'historico'
+                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
+            }`}
+          >
+            <History size={15} className={activeTab === 'historico' ? 'text-black' : 'text-emerald-400'} />
+            <span>Histórico de Logs</span>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+              activeTab === 'historico'
+                ? 'bg-black/20 text-black'
+                : isAuthUnlocked
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+            }`}>
+              {isAuthUnlocked ? 'Liberado' : 'Login'}
+            </span>
+          </button>
+
+          {/* 5. FOLLOW-UP SEMANAL (PROTEGIDO POR LOGIN) */}
+          <button
+            type="button"
+            id="tab-btn-followup"
+            onClick={() => handleTabChange('followup')}
+            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'followup'
+                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
+            }`}
+          >
+            <CalendarClock size={15} className={activeTab === 'followup' ? 'text-black' : 'text-emerald-400'} />
+            <span>Follow-up Semanal</span>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+              activeTab === 'followup'
+                ? 'bg-black/20 text-black'
+                : isAuthUnlocked
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+            }`}>
+              {isAuthUnlocked ? 'Liberado' : 'Login'}
+            </span>
+          </button>
+        </nav>
 
         {/* CONTEÚDO DINÂMICO DE ACORDO COM A ABA ATIVA */}
-        {activeTab === 'painel' && (
+        
+        {/* ABA 1: CRONÔMETRO (ACESSO LIVRE SEM LOGIN) */}
+        {activeTab === 'cronometro' && (
           <div className="space-y-6 animate-fade-in">
-            {/* 0. CONTROLO OPERACIONAL & FILTROS (SETOR 87 SOLO, 88-90 UNIFICADOS, VISÕES DIÁRIA, SEMANAL E MENSAL) */}
-            <TemporalFilterBar
-              activeSectorId={activeSectorId}
-              onSectorChange={(sec) => updateActiveSector(sec, addToast)}
-              period={temporalPeriod}
-              onPeriodChange={setTemporalPeriod}
-              selectedDate={selectedDate}
-              onDateChange={setSelectedDate}
-              selectedWeek={selectedWeek}
-              onWeekChange={setSelectedWeek}
-              selectedMonthKey={selectedMonthKey}
-              onMonthChange={setSelectedMonthKey}
-              availableWeeks={availableWeeks}
-              availableMonths={availableMonths}
-              totalLogsCount={cleanLogs.length}
-              filteredLogsCount={filteredLogs.length}
-            />
-
-            {/* 1. MÉTRICAS SESSÃO */}
-            <DashboardMetrics logs={filteredLogs} />
-
-            {/* 2. DUAL STOPWATCHES & BASE STATUS */}
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-              
               <div className="lg:col-span-3 space-y-6">
                 <StopwatchPanel
                   timerState={timerState}
@@ -1226,7 +1241,6 @@ export default function App() {
 
               {/* STATUS DA BASE / SIDEBAR CONFIGS */}
               <div className="space-y-6">
-                
                 <section className="border-panel p-5 md:p-6 rounded-2xl relative overflow-hidden">
                   <div className="flex items-center gap-2 mb-4 border-b border-white/10 pb-2.5">
                     <div className="p-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -1295,20 +1309,10 @@ export default function App() {
                     <span>Baixar Dados da Nuvem</span>
                   </button>
                 </section>
-
               </div>
             </div>
 
-            {/* 3. BREAKDOWN POR ATIVIDADE DIRETA */}
-            <BreakdownPanel logs={filteredLogs} />
-            
-            {/* 4. EVOLUÇÃO PRODUTIVIDADE VPH */}
-            <VphChart logs={filteredLogs} />
-
-            {/* 5. RANKING DE OPERADORES */}
-            <RankingTable logs={filteredLogs} />
-
-            {/* 6. REGISTOS RECENTES */}
+            {/* ÚLTIMOS APONTAMENTOS RECENTES DA SESSÃO */}
             <RecentLogsTable
               logs={filteredLogs}
               onDeleteLog={handleDeleteLog}
@@ -1320,36 +1324,142 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'historico' && (
+        {/* ABA 2: REABASTECIMENTO POR RUA (ACESSO LIVRE SEM LOGIN) */}
+        {activeTab === 'ruas' && (
           <div className="animate-fade-in">
-            <HistoryTab 
-              logs={logs} 
-              apiUrl={apiUrl}
-              onRefresh={async () => {
-                const refreshedLogs = await getLogs();
-                setLogs(refreshedLogs);
-              }} 
-              onAddToast={addToast}
-              onImportCloud={importarPlanilha}
-              onRetrySync={handleRetrySyncLog}
-              userUid={user?.id || user?.uid}
-            />
+            <ErrorBoundary fallbackTitle="Módulo de Reabastecimento por Rua">
+              <StreetReplenishmentModule
+                logs={filteredLogs}
+                activeOperator={activeOperator}
+                activeSectorId={activeSectorId}
+                onSaveLog={handleSaveStreetLog}
+                onAddToast={addToast}
+              />
+            </ErrorBoundary>
           </div>
         )}
 
-        {activeTab === 'followup' && (
-          <div className="animate-fade-in">
-            <WeeklyFollowupTab
-              logs={logs}
-              apiUrl={apiUrl}
-              onAddToast={addToast}
-              onRefreshLogs={async () => {
-                const refreshedLogs = await getLogs();
-                setLogs(refreshedLogs);
+        {/* ABA 3: PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
+        {activeTab === 'painel' && (
+          !isAuthUnlocked ? (
+            <AuthLoginCard
+              requestedTabName="Painel Operacional"
+              onNavigateToTab={(t) => handleTabChange(t)}
+              onGuestAccess={() => {
+                setIsGuestMode(true);
+                localStorage.setItem('repro_guest_mode', 'true');
+                addToast("Acesso local autorizado para Painel Operacional.", "var(--color-info)");
               }}
-              userUid={user?.id || user?.uid}
+              onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
+              onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
             />
-          </div>
+          ) : (
+            <div className="space-y-6 animate-fade-in">
+              {/* 0. CONTROLO OPERACIONAL & FILTROS (SETOR 87 SOLO, 88-90 UNIFICADOS, VISÕES DIÁRIA, SEMANAL E MENSAL) */}
+              <TemporalFilterBar
+                activeSectorId={activeSectorId}
+                onSectorChange={(sec) => updateActiveSector(sec, addToast)}
+                period={temporalPeriod}
+                onPeriodChange={setTemporalPeriod}
+                selectedDate={selectedDate}
+                onDateChange={setSelectedDate}
+                selectedWeek={selectedWeek}
+                onWeekChange={setSelectedWeek}
+                selectedMonthKey={selectedMonthKey}
+                onMonthChange={setSelectedMonthKey}
+                availableWeeks={availableWeeks}
+                availableMonths={availableMonths}
+                totalLogsCount={cleanLogs.length}
+                filteredLogsCount={filteredLogs.length}
+              />
+
+              {/* 1. MÉTRICAS SESSÃO */}
+              <DashboardMetrics logs={filteredLogs} />
+
+              {/* 2. GRÁFICOS & ANÁLISE DE PRODUTIVIDADE */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2">
+                  <VphChart logs={filteredLogs} />
+                </div>
+                <div className="space-y-6">
+                  <BreakdownPanel logs={filteredLogs} />
+                  <RankingTable logs={filteredLogs} />
+                </div>
+              </div>
+
+              {/* ÚLTIMOS APONTAMENTOS */}
+              <RecentLogsTable
+                logs={filteredLogs}
+                onDeleteLog={handleDeleteLog}
+                onExportBackup={handleExportBackup}
+                onClearDb={handleClearDb}
+                onRetrySync={handleRetrySyncLog}
+                apiUrl={apiUrl}
+              />
+            </div>
+          )
+        )}
+
+        {/* ABA 4: HISTÓRICO DE LOGS (PROTEGIDO POR LOGIN) */}
+        {activeTab === 'historico' && (
+          !isAuthUnlocked ? (
+            <AuthLoginCard
+              requestedTabName="Histórico de Logs"
+              onNavigateToTab={(t) => handleTabChange(t)}
+              onGuestAccess={() => {
+                setIsGuestMode(true);
+                localStorage.setItem('repro_guest_mode', 'true');
+                addToast("Acesso local autorizado para Histórico de Logs.", "var(--color-info)");
+              }}
+              onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
+              onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
+            />
+          ) : (
+            <div className="animate-fade-in">
+              <HistoryTab 
+                logs={logs} 
+                apiUrl={apiUrl}
+                onRefresh={async () => {
+                  const refreshedLogs = await getLogs();
+                  setLogs(refreshedLogs);
+                }} 
+                onAddToast={addToast}
+                onImportCloud={importarPlanilha}
+                onRetrySync={handleRetrySyncLog}
+                userUid={user?.id || user?.uid}
+              />
+            </div>
+          )
+        )}
+
+        {/* ABA 5: FOLLOW-UP SEMANAL (PROTEGIDO POR LOGIN) */}
+        {activeTab === 'followup' && (
+          !isAuthUnlocked ? (
+            <AuthLoginCard
+              requestedTabName="Follow-up Semanal"
+              onNavigateToTab={(t) => handleTabChange(t)}
+              onGuestAccess={() => {
+                setIsGuestMode(true);
+                localStorage.setItem('repro_guest_mode', 'true');
+                addToast("Acesso local autorizado para Follow-up Semanal.", "var(--color-info)");
+              }}
+              onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
+              onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
+            />
+          ) : (
+            <div className="animate-fade-in">
+              <WeeklyFollowupTab
+                logs={logs}
+                apiUrl={apiUrl}
+                onAddToast={addToast}
+                onRefreshLogs={async () => {
+                  const refreshedLogs = await getLogs();
+                  setLogs(refreshedLogs);
+                }}
+                userUid={user?.id || user?.uid}
+              />
+            </div>
+          )
         )}
 
       </div>
