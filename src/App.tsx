@@ -16,19 +16,7 @@ import {
   clearLogsAndState
 } from './dbLocal';
 import { syncOfflineQueue, fetchFromCloud, postLogWithRetry } from './sheetService';
-import {
-  supabase,
-  getSupabase,
-  signInWithGoogle,
-  signOutSupabase,
-  getCurrentSupabaseUser,
-  syncPerfilDirectly,
-  fetchPerfilDirectly,
-  saveLogsDirectly,
-  fetchLogsDirectly,
-  deleteLogDirectly,
-  clearLogsDirectly
-} from './utils/supabase/client';
+
 import { getWeekNumber, getDayOfWeekName, formatDateToBR, parseDateString } from './utils/dateUtils';
 import { EventBus } from './eventBus';
 import { useSectorStore } from './stores/sectorStore';
@@ -104,9 +92,12 @@ interface Toast {
 export default function App() {
   const [dbReady, setDbReady] = useState(false);
   
-  // Authentication states (Supabase User or null)
-  const [user, setUser] = useState<any>(null);
-  const [loadingUser, setLoadingUser] = useState(true);
+  // Authentication states (Local User or null)
+  const [user, setUser] = useState<any>(() => {
+    const saved = localStorage.getItem('repro_local_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [loadingUser, setLoadingUser] = useState(false);
   const [isGuestMode, setIsGuestMode] = useState(() => localStorage.getItem('repro_guest_mode') === 'true');
 
   // Zustand Stores
@@ -203,123 +194,7 @@ export default function App() {
     return filterLogsByPeriod(sectorLogs, temporalPeriod, selectedDate, selectedWeek, selectedMonthKey);
   }, [sectorLogs, temporalPeriod, selectedDate, selectedWeek, selectedMonthKey]);
 
-  // Subscribe to Supabase Authentication and sync
-  useEffect(() => {
-    async function initUserSession(currentUser: any) {
-      if (!currentUser) {
-        setUser(null);
-        setLoadingUser(false);
-        return;
-      }
 
-      setUser(currentUser);
-      setIsGuestMode(false);
-      localStorage.setItem('repro_guest_mode', 'false');
-      
-      setSupabaseLoading(true);
-      try {
-        const email = currentUser.email || '';
-        const displayName = currentUser.user_metadata?.full_name || currentUser.email || 'Operador';
-        const userUid = currentUser.id || currentUser.uid;
-        
-        // 1. Sync or retrieve user profile in Supabase
-        const existingPerfil = await fetchPerfilDirectly(userUid);
-        let role = 'Pendente';
-        
-        if (existingPerfil) {
-          role = existingPerfil.role || 'Pendente';
-          updateCurrentRole(role);
-        } else {
-          await syncPerfilDirectly(userUid, email, displayName, 'Pendente', 'Geral');
-        }
-        
-        addToast(`Sessão iniciada como ${displayName}. Perfil: ${role}`, 'var(--color-success)');
-        
-        // 2. Pull and sync records from Supabase
-        const cloudRecords = await fetchLogsDirectly(userUid);
-        for (const rec of cloudRecords) {
-          await saveLog({
-            id: rec.id,
-            data: rec.data,
-            dia: rec.dia,
-            semana: rec.semana,
-            atividade: rec.atividade,
-            colaborador: rec.colaborador,
-            setor: rec.setor,
-            volumes: rec.volumes,
-            horas: rec.horas,
-            vph: rec.vph,
-            timestamp: rec.timestamp,
-            synced: true,
-            tipo: rec.tipo
-          });
-        }
-        const refreshed = await getLogs();
-        setLogs(refreshed);
-      } catch (err: any) {
-        console.error("Cloud Supabase sync error:", err);
-        const errorMsg = err.message || 'Erro de conexão';
-        addToast(`Erro ao sincronizar dados com Supabase: ${errorMsg}`, 'var(--color-danger)');
-      } finally {
-        setSupabaseLoading(false);
-        setLoadingUser(false);
-      }
-    }
-
-    getCurrentSupabaseUser().then(user => initUserSession(user));
-
-    const client = getSupabase();
-    let authListener: any = null;
-    if (client?.auth) {
-      const { data } = client.auth.onAuthStateChange(async (event, session) => {
-        if (session?.user) {
-          initUserSession(session.user);
-        } else {
-          setUser(null);
-          setLoadingUser(false);
-        }
-      });
-      authListener = data;
-    }
-
-    return () => {
-      if (authListener?.subscription) {
-        authListener.subscription.unsubscribe();
-      }
-    };
-  }, []);
-
-  // Periodic background cloud synchronization
-  useEffect(() => {
-    if (!user || networkStatus !== 'online') return;
-    
-    const interval = setInterval(async () => {
-      const unsyncedLogs = logs.filter(l => !l.synced);
-      if (unsyncedLogs.length === 0) return;
-      
-      setSupabaseLoading(true);
-      try {
-        const userUid = user.id || user.uid;
-        await saveLogsDirectly(unsyncedLogs, userUid);
-        for (const l of unsyncedLogs) {
-          await saveLog({ ...l, synced: true });
-        }
-        const refreshed = await getLogs();
-        setLogs(refreshed);
-        const now = new Date();
-        setLastSyncTime(now.toLocaleTimeString('pt-PT'));
-        addToast(`${unsyncedLogs.length} logs pendentes sincronizados na nuvem Supabase!`, 'var(--color-success)');
-      } catch (err: any) {
-        console.error("Periodic Supabase sync failed:", err);
-        const errorCode = err.code || 'N/A';
-        addToast(`Erro de sincronização em segundo plano [Código: ${errorCode}]`, 'var(--color-danger)');
-      } finally {
-        setSupabaseLoading(false);
-      }
-    }, 25000);
-    
-    return () => clearInterval(interval);
-  }, [user, logs, networkStatus]);
 
 
 
@@ -753,20 +628,6 @@ export default function App() {
       await deleteLog(id);
       addToast("Registo removido localmente.", 'var(--color-warning)');
       
-      if (user && networkStatus === 'online') {
-        setSupabaseLoading(true);
-        try {
-          await deleteLogDirectly(id, user.uid);
-          addToast("Registo removido da nuvem Supabase!", 'var(--color-success)');
-        } catch (err: any) {
-          console.error("Cloud delete error:", err);
-          const errorCode = err.code || 'N/A';
-          addToast(`Falha ao sincronizar remoção na nuvem [Código: ${errorCode}]`, 'var(--color-warning)');
-        } finally {
-          setSupabaseLoading(false);
-        }
-      }
-      
       const refreshedLogs = await getLogs();
       setLogs(refreshedLogs);
     }
@@ -798,20 +659,6 @@ export default function App() {
   const handleClearDb = async () => {
     if (confirm("ALERTA DE SEGURANÇA: Esta acao apaga permanentemente todo o historico e rascunhos. Continuar?")) {
       await clearLogsAndState();
-      
-      if (user && networkStatus === 'online') {
-        setSupabaseLoading(true);
-        try {
-          await clearLogsDirectly(user.uid);
-          addToast("Base de dados cloud redefinida.", 'var(--color-danger)');
-        } catch (err: any) {
-          console.error("Cloud clear error:", err);
-          const errorCode = err.code || 'N/A';
-          addToast(`Falha ao redefinir base de dados cloud [Código: ${errorCode}]`, 'var(--color-danger)');
-        } finally {
-          setSupabaseLoading(false);
-        }
-      }
       
       setTimerState({
         cronometro: { ativo: false, inicio: 0, segundos: 0, atividade: '', botaoId: '', tipo: 'direta' },
@@ -869,17 +716,6 @@ export default function App() {
       if (networkStatus === 'online') {
         if (apiUrl) {
           await sincronizarFila(false);
-        }
-        if (user) {
-          const userUid = user.id || user.uid;
-          const cloudRecs = await fetchLogsDirectly(userUid);
-          if (cloudRecs && cloudRecs.length > 0) {
-            for (const rec of cloudRecs) {
-              await saveLog({ ...rec, synced: true });
-            }
-            const refreshed = await getLogs();
-            setLogs(refreshed);
-          }
         }
       }
 
@@ -1041,8 +877,9 @@ export default function App() {
                 <>
                   <span className="text-slate-400">OPERADOR: <strong className="text-white uppercase">{user.user_metadata?.full_name || user.email}</strong></span>
                   <button
-                    onClick={async () => {
-                      await signOutSupabase();
+                    onClick={() => {
+                      localStorage.removeItem('repro_local_user');
+                      setUser(null);
                       addToast("Sessão terminada.", 'var(--color-info)');
                     }}
                     className="px-2 py-1 bg-white/5 border border-white/10 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 rounded-lg cursor-pointer transition-all"
@@ -1058,7 +895,7 @@ export default function App() {
                   }}
                   className="px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-black rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold"
                 >
-                  CONECTAR SUPABASE ⚡
+                  FAZER LOGIN ⚡
                 </button>
               )}
             </div>
@@ -1345,10 +1182,9 @@ export default function App() {
             <AuthLoginCard
               requestedTabName="Painel Operacional"
               onNavigateToTab={(t) => handleTabChange(t)}
-              onGuestAccess={() => {
-                setIsGuestMode(true);
-                localStorage.setItem('repro_guest_mode', 'true');
-                addToast("Acesso local autorizado para Painel Operacional.", "var(--color-info)");
+              onLoginSuccess={(u) => {
+                setUser(u);
+                localStorage.setItem('repro_local_user', JSON.stringify(u));
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
@@ -1406,10 +1242,9 @@ export default function App() {
             <AuthLoginCard
               requestedTabName="Histórico de Logs"
               onNavigateToTab={(t) => handleTabChange(t)}
-              onGuestAccess={() => {
-                setIsGuestMode(true);
-                localStorage.setItem('repro_guest_mode', 'true');
-                addToast("Acesso local autorizado para Histórico de Logs.", "var(--color-info)");
+              onLoginSuccess={(u) => {
+                setUser(u);
+                localStorage.setItem('repro_local_user', JSON.stringify(u));
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
@@ -1438,10 +1273,9 @@ export default function App() {
             <AuthLoginCard
               requestedTabName="Follow-up Semanal"
               onNavigateToTab={(t) => handleTabChange(t)}
-              onGuestAccess={() => {
-                setIsGuestMode(true);
-                localStorage.setItem('repro_guest_mode', 'true');
-                addToast("Acesso local autorizado para Follow-up Semanal.", "var(--color-info)");
+              onLoginSuccess={(u) => {
+                setUser(u);
+                localStorage.setItem('repro_local_user', JSON.stringify(u));
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
