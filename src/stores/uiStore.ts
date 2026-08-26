@@ -6,7 +6,7 @@ export interface Toast {
   color: string;
 }
 
-export type TabType = 'cronometro' | 'ruas' | 'painel' | 'historico' | 'followup';
+export type TabType = 'cronometro' | 'ruas' | 'gestao' | 'painel' | 'historico' | 'followup';
 
 interface UIState {
   activeTab: TabType;
@@ -26,8 +26,18 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set) => ({
   activeTab: (() => {
+    // 1. Prioridade: Parâmetro direto na URL (?tab=ruas, ?tab=gestao, etc.)
+    if (typeof window !== 'undefined' && window.location.search) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const tabParam = urlParams.get('tab') as TabType;
+      if (tabParam && ['cronometro', 'ruas', 'gestao', 'painel', 'historico', 'followup'].includes(tabParam)) {
+        return tabParam;
+      }
+    }
+
+    // 2. Persistência no LocalStorage
     const saved = localStorage.getItem('repro_active_tab') as TabType;
-    if (saved === 'cronometro' || saved === 'ruas' || saved === 'painel' || saved === 'historico' || saved === 'followup') {
+    if (saved === 'cronometro' || saved === 'ruas' || saved === 'gestao' || saved === 'painel' || saved === 'historico' || saved === 'followup') {
       return saved;
     }
     return 'cronometro';

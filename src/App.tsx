@@ -35,6 +35,7 @@ import BreakdownPanel from './components/BreakdownPanel';
 import HistoryTab from './components/HistoryTab';
 import WeeklyFollowupTab from './components/WeeklyFollowupTab';
 import StreetReplenishmentModule from './components/StreetReplenishmentModule';
+import ManagementModule from './components/ManagementModule';
 import ErrorBoundary from './components/ErrorBoundary';
 import Screensaver from './components/Screensaver';
 import FormModalFloatingButton from './components/FormModalFloatingButton';
@@ -57,7 +58,10 @@ import {
   Settings, 
   Edit3,
   MapPin,
-  Clock
+  Clock,
+  Layers,
+  FileSpreadsheet,
+  Cpu
 } from 'lucide-react';
 
 const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
@@ -956,10 +960,32 @@ export default function App() {
             </span>
           </button>
 
+          {/* 3. GESTÃO / AUDITORIA / SHEETS (NOVO MÓDULO CONSOLIDADO) */}
+          <button
+            type="button"
+            id="tab-btn-gestao"
+            onClick={() => handleTabChange('gestao')}
+            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'gestao'
+                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
+            }`}
+          >
+            <Layers size={15} className={activeTab === 'gestao' ? 'text-black' : 'text-emerald-400'} />
+            <span>Gestão & Sheets</span>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+              activeTab === 'gestao'
+                ? 'bg-black/20 text-black'
+                : 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
+            }`}>
+              PC / Web
+            </span>
+          </button>
+
           {/* SEPARADOR VERTICAL SUTIL */}
           <div className="h-6 w-px bg-white/10 mx-1 shrink-0" />
 
-          {/* 3. PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
+          {/* 4. PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
           <button
             type="button"
             id="tab-btn-painel"
@@ -971,7 +997,7 @@ export default function App() {
             }`}
           >
             <LayoutDashboard size={15} className={activeTab === 'painel' ? 'text-black' : 'text-emerald-400'} />
-            <span>Painel Operacional</span>
+            <span>Painel Gráfico</span>
             <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
               activeTab === 'painel'
                 ? 'bg-black/20 text-black'
@@ -1176,7 +1202,22 @@ export default function App() {
           </div>
         )}
 
-        {/* ABA 3: PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
+        {/* ABA 3: GESTÃO / AUDITORIA / SHEETS (ACESSO LIVRE / MÓDULO WEB & PC) */}
+        {activeTab === 'gestao' && (
+          <div className="animate-fade-in">
+            <ErrorBoundary fallbackTitle="Módulo de Gestão & Sheets">
+              <ManagementModule
+                logs={logs}
+                activeSectorId={activeSectorId}
+                apiUrl={apiUrl}
+                onApiUrlChange={handleApiUrlChange}
+                onAddToast={addToast}
+              />
+            </ErrorBoundary>
+          </div>
+        )}
+
+        {/* ABA 4: PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
         {activeTab === 'painel' && (
           !isAuthUnlocked ? (
             <AuthLoginCard

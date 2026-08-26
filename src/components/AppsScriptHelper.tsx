@@ -9,11 +9,10 @@ import { Clipboard, Check } from 'lucide-react';
 export default function AppsScriptHelper() {
   const [copied, setCopied] = useState(false);
 
-    var codeSnippet = `// Google Apps Script para o Terminal REPRO (Aba: Controle de horas - Repro)
+    var codeSnippet = `// Google Apps Script para o Terminal REPRO (Abas: Controle de horas - Repro, RESUMO, EVENTOS)
 // Colar no Editor de Scripts da Planilha Google (Extensões > Apps Script)
 
 function doPost(e) {
-  const SHEET_NAME = "Controle de horas - Repro";
   const SPREADSHEET_ID = "1dm1FJTjbjqIGo4nCLz2odAwbhDZ6eM5yzMLbPXl3N4c";
   
   const resposta = (sucesso, dados, statusCode = 200) => {
@@ -35,10 +34,67 @@ function doPost(e) {
     }
 
     const lock = LockService.getScriptLock();
-    lock.waitLock(10000);
+    lock.waitLock(15000);
 
     try {
       const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+      
+      // 1. SE FOR SINCRONIZAÇÃO EM LOTE DO RESUMO REPRO
+      if (dados.tipo === 'SYNC_BATCH_REPRO' && Array.isArray(dados.resumo)) {
+        let sheetResumo = ss.getSheetByName("RESUMO_REPRO");
+        if (!sheetResumo) {
+          sheetResumo = ss.insertSheet("RESUMO_REPRO");
+          sheetResumo.appendRow(["Data", "Setor", "Rua", "Status", "Demanda", "Realizado", "Pendente", "Cobertura_%", "Excedente", "EPH", "VPH", "Tempo", "Atualizado_Em"]);
+        }
+
+        const dataStr = dados.data || new Date().toLocaleDateString('pt-BR');
+        const agora = new Date().toISOString();
+
+        dados.resumo.forEach(item => {
+          sheetResumo.appendRow([
+            dataStr,
+            item.setor || "",
+            item.rua || "",
+            item.status || "",
+            item.demanda || 0,
+            item.realizado || 0,
+            item.pendente || 0,
+            item.coberturaPercent || 0,
+            item.excedente || 0,
+            item.eph || "0.0",
+            item.vph || "0.0",
+            item.tempoTotalSegundos || 0,
+            agora
+          ]);
+        });
+
+        // Grava eventos se existirem no lote
+        if (Array.isArray(dados.eventos) && dados.eventos.length > 0) {
+          let sheetEventos = ss.getSheetByName("EVENTOS_OPERACIONAIS");
+          if (!sheetEventos) {
+            sheetEventos = ss.insertSheet("EVENTOS_OPERACIONAIS");
+            sheetEventos.appendRow(["Event_ID", "Timestamp", "Tipo", "Setor", "Rua", "Delta_Enderecos", "Delta_Volumes", "Lap_Segundos", "Justificativa"]);
+          }
+          dados.eventos.forEach(evt => {
+            sheetEventos.appendRow([
+              evt.id || "",
+              new Date(evt.timestamp || Date.now()).toISOString(),
+              evt.tipo || "",
+              evt.setor || "",
+              evt.rua || "",
+              evt.enderecosDelta || 0,
+              evt.volumesDelta || 0,
+              evt.lapDurationSeconds || 0,
+              evt.justification || ""
+            ]);
+          });
+        }
+
+        return resposta(true, { registrosProcessados: dados.resumo.length });
+      }
+
+      // 2. SE FOR REGISTRO PADRÃO DE LOG FINALIZADO (Controle de horas - Repro)
+      const SHEET_NAME = "Controle de horas - Repro";
       const sheet = ss.getSheetByName(SHEET_NAME) || ss.getActiveSheet();
       
       const vph = dados.horas > 0 ? (dados.qtdEnderecos / dados.horas) : 0;
@@ -61,14 +117,13 @@ function doPost(e) {
           const rAtiv = String(dataValues[i][4] || "").trim();
           const rColab = String(dataValues[i][5] || "").toUpperCase().trim();
 
-          // Se encontrar mesmo setor, colaborador, data e atividade -> atualiza em vez de duplicar
           if (
             rSetor === novoSetor &&
             rColab === novoColab &&
             rAtiv.toLowerCase() === novaAtiv.toLowerCase() &&
             (rDataStr === novaData || (rDataRaw instanceof Date && novaData.includes(rDataRaw.toLocaleDateString('pt-BR'))))
           ) {
-            linhaAlvo = i + 2; // +2 compensa cabeçalho (1-based)
+            linhaAlvo = i + 2;
             modo = "atualizado";
             break;
           }

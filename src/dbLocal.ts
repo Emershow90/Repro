@@ -103,10 +103,17 @@ export function deleteLog(id: number): Promise<boolean> {
   });
 }
 
-export function saveState(key: string, data: AppTimerState): Promise<boolean> {
+export function saveState<T = any>(key: string, data: T): Promise<boolean> {
   return new Promise((resolve, reject) => {
     if (!dbInstance) {
-      reject(new Error("Database not initialized"));
+      // Se ainda não inicializou, tenta inicializar ou salva em memória segura
+      initDb().then((db) => {
+        const transaction = db.transaction('state', 'readwrite');
+        const store = transaction.objectStore('state');
+        store.put({ key, data });
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = () => reject(transaction.error);
+      }).catch(err => reject(err));
       return;
     }
     const transaction = dbInstance.transaction('state', 'readwrite');
@@ -123,10 +130,22 @@ export function saveState(key: string, data: AppTimerState): Promise<boolean> {
   });
 }
 
-export function getState(key: string): Promise<AppTimerState | null> {
+export function getState<T = any>(key: string): Promise<T | null> {
   return new Promise((resolve, reject) => {
     if (!dbInstance) {
-      resolve(null);
+      initDb().then((db) => {
+        const transaction = db.transaction('state', 'readonly');
+        const store = transaction.objectStore('state');
+        const request = store.get(key);
+        request.onsuccess = () => {
+          if (request.result) {
+            resolve(request.result.data as T);
+          } else {
+            resolve(null);
+          }
+        };
+        request.onerror = () => reject(request.error);
+      }).catch(() => resolve(null));
       return;
     }
     const transaction = dbInstance.transaction('state', 'readonly');
@@ -135,7 +154,7 @@ export function getState(key: string): Promise<AppTimerState | null> {
 
     request.onsuccess = () => {
       if (request.result) {
-        resolve(request.result.data as AppTimerState);
+        resolve(request.result.data as T);
       } else {
         resolve(null);
       }
@@ -169,3 +188,36 @@ export function clearLogsAndState(): Promise<boolean> {
     };
   });
 }
+
+// Fila de Eventos Operacionais para Sincronização em Segundo Plano (Zero bloqueio no PDT)
+export async function enqueueOperationalEvent(event: any): Promise<void> {
+  try {
+    const queue = (await getState<any[]>('operational_sync_queue')) || [];
+    // Evita duplicatas na fila
+    if (!queue.some(item => item.id === event.id)) {
+      queue.push(event);
+      await saveState('operational_sync_queue', queue);
+    }
+  } catch (err) {
+    console.warn('Falha ao enfileirar evento operacional offline:', err);
+  }
+}
+
+export async function getOperationalSyncQueue(): Promise<any[]> {
+  try {
+    return (await getState<any[]>('operational_sync_queue')) || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function clearOperationalSyncQueue(processedIds: string[]): Promise<void> {
+  try {
+    const queue = (await getState<any[]>('operational_sync_queue')) || [];
+    const remaining = queue.filter(item => !processedIds.includes(item.id));
+    await saveState('operational_sync_queue', remaining);
+  } catch (err) {
+    console.warn('Erro ao limpar fila de eventos sincronizados:', err);
+  }
+}
+
