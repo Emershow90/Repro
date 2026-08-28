@@ -4,8 +4,10 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
+  const repositoryName = process.env.GITHUB_REPOSITORY?.split('/')[1];
   return {
-    base: './',
+    // GitHub Pages serves project sites under /<repository>/; local builds keep relative assets.
+    base: repositoryName ? `/${repositoryName}/` : './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
