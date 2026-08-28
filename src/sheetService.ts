@@ -141,7 +141,7 @@ function jsonpFetch(url: string, timeoutMs = 15000): Promise<any> {
 /**
  * Posts a log to Google Apps Script Web App (Aba: Controle de horas - Repro)
  */
-export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<boolean> {
+export async function postToGoogleSheets(apiUrl: string, log: Log, signal?: AbortSignal): Promise<boolean> {
   if (!apiUrl || !apiUrl.startsWith('http')) return false;
 
   const payload = {
@@ -164,7 +164,8 @@ export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<bool
     const proxyRes = await fetch('/api/sheets/proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiUrl, payload })
+      body: JSON.stringify({ apiUrl, payload }),
+      signal,
     });
 
     if (proxyRes.ok) {
@@ -178,6 +179,7 @@ export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<bool
   // Tier 2: Direct browser fetch with standard CORS
   try {
     const response = await fetch(apiUrl, {
+      signal,
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload),
@@ -568,7 +570,8 @@ export async function postLogWithRetry(
   apiUrl: string,
   log: Log,
   userUid?: string,
-  maxAttempts = 3
+  maxAttempts = 3,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   let gsheetsSuccess = false;
 
@@ -576,7 +579,8 @@ export async function postLogWithRetry(
   if (apiUrl && apiUrl.startsWith('http')) {
     let attempt = 0;
     while (attempt < maxAttempts) {
-      const ok = await postToGoogleSheets(apiUrl, log);
+      if (signal?.aborted) throw new DOMException('Sincronização cancelada', 'AbortError');
+      const ok = await postToGoogleSheets(apiUrl, log, signal);
       if (ok) {
         gsheetsSuccess = true;
         break;
@@ -608,7 +612,8 @@ export async function postLogWithRetry(
 export async function syncOfflineQueue(
   apiUrl: string,
   onProgress?: (syncedCount: number) => void,
-  userUid?: string
+  userUid?: string,
+  signal?: AbortSignal,
 ): Promise<{ successCount: number; failedCount: number }> {
   const allLogs = await getLogs();
   const unsyncedLogs = allLogs.filter(l => !l.synced);
@@ -622,7 +627,7 @@ export async function syncOfflineQueue(
 
   for (let i = unsyncedLogs.length - 1; i >= 0; i--) {
     const log = unsyncedLogs[i];
-    const isSuccess = await postLogWithRetry(apiUrl, log, userUid);
+    const isSuccess = await postLogWithRetry(apiUrl, log, userUid, 3, signal);
 
     if (isSuccess) {
       log.synced = true;

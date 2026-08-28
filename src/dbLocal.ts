@@ -3,10 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Log, AppTimerState } from './types';
+import { z } from 'zod';
+import { Log } from './types';
 
 const DB_NAME = "TerminalReproV5";
 const DB_VERSION = 1;
+
+const timerStateSchema = z.object({
+  cronometro: z.object({
+    ativo: z.boolean(), inicio: z.number(), segundos: z.number(), atividade: z.string(), botaoId: z.string(), tipo: z.enum(['direta', 'indireta']),
+  }),
+  rascunhoColab: z.string(),
+  rascunhoVol: z.string(),
+});
 
 let dbInstance: IDBDatabase | null = null;
 
@@ -130,7 +139,7 @@ export function saveState<T = any>(key: string, data: T): Promise<boolean> {
   });
 }
 
-export function getState<T = any>(key: string): Promise<T | null> {
+export function getState<T = unknown>(key: string, schema?: z.ZodType<T>): Promise<T | null> {
   return new Promise((resolve, reject) => {
     if (!dbInstance) {
       initDb().then((db) => {
@@ -139,7 +148,9 @@ export function getState<T = any>(key: string): Promise<T | null> {
         const request = store.get(key);
         request.onsuccess = () => {
           if (request.result) {
-            resolve(request.result.data as T);
+            const value = request.result.data;
+            const parsed = schema?.safeParse(value);
+            resolve(parsed ? (parsed.success ? parsed.data : null) : value as T);
           } else {
             resolve(null);
           }
@@ -154,7 +165,9 @@ export function getState<T = any>(key: string): Promise<T | null> {
 
     request.onsuccess = () => {
       if (request.result) {
-        resolve(request.result.data as T);
+        const value = request.result.data;
+        const parsed = schema?.safeParse(value);
+        resolve(parsed ? (parsed.success ? parsed.data : null) : value as T);
       } else {
         resolve(null);
       }
@@ -164,6 +177,10 @@ export function getState<T = any>(key: string): Promise<T | null> {
       reject(request.error);
     };
   });
+}
+
+export function getTimerState() {
+  return getState('timerStateDual', timerStateSchema);
 }
 
 export function clearLogsAndState(): Promise<boolean> {
@@ -220,4 +237,3 @@ export async function clearOperationalSyncQueue(processedIds: string[]): Promise
     console.warn('Erro ao limpar fila de eventos sincronizados:', err);
   }
 }
-

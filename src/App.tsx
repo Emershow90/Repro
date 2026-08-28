@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useMemo, ChangeEvent } from 'react';
+import { useState, useEffect, ChangeEvent } from 'react';
 import { Wifi, WifiOff, Cloud, Database, RefreshCw, AlertCircle, LogIn, LogOut, Loader2, Key } from 'lucide-react';
 import { Log, AppTimerState } from './types';
 import {
@@ -39,14 +39,8 @@ import ManagementModule from './components/ManagementModule';
 import ErrorBoundary from './components/ErrorBoundary';
 import Screensaver from './components/Screensaver';
 import FormModalFloatingButton from './components/FormModalFloatingButton';
-import { 
-  deduplicateLogs, 
-  isLogMatchingSector, 
-  filterLogsByPeriod, 
-  PeriodType, 
-  getMonthYearKey, 
-  formatDateToPt 
-} from './utils/logUtils';
+import { useAuthSession } from './hooks/useAuthSession';
+import { useLogFilters } from './hooks/useLogFilters';
 import { 
   LayoutDashboard, 
   History, 
@@ -96,13 +90,8 @@ interface Toast {
 export default function App() {
   const [dbReady, setDbReady] = useState(false);
   
-  // Authentication states (Local User or null)
-  const [user, setUser] = useState<any>(() => {
-    const saved = localStorage.getItem('repro_local_user');
-    return saved ? JSON.parse(saved) : null;
-  });
   const [loadingUser, setLoadingUser] = useState(false);
-  const [isGuestMode, setIsGuestMode] = useState(() => localStorage.getItem('repro_guest_mode') === 'true');
+  const { user, isGuest: isGuestMode, isUnlocked: isAuthUnlocked, login, logout } = useAuthSession();
 
   // Zustand Stores
   const { activeSectorId, childActiveSector, updateActiveSector } = useSectorStore();
@@ -168,35 +157,20 @@ export default function App() {
     storeUpdateScreensaverTimeout(timeout, addToast);
   };
 
-  // Temporal Filter State for Dashboard
-  const [temporalPeriod, setTemporalPeriod] = useState<PeriodType>('todos');
-  const [selectedDate, setSelectedDate] = useState<string>(() => formatDateToPt(new Date()));
-  const [selectedWeek, setSelectedWeek] = useState<number>(() => getWeekNumber(new Date()));
-  const [selectedMonthKey, setSelectedMonthKey] = useState<string>(() => getMonthYearKey(formatDateToPt(new Date())));
-
-  // 1. Clean deduplicated logs (no repetitive records)
-  const cleanLogs = useMemo(() => {
-    return deduplicateLogs(logs);
-  }, [logs]);
-
-  // Available weeks & months derived from clean data
-  const availableWeeks = useMemo(() => {
-    return Array.from(new Set(cleanLogs.map(l => Number(l.semana)))).sort((a, b) => Number(b) - Number(a));
-  }, [cleanLogs]);
-
-  const availableMonths = useMemo(() => {
-    return Array.from(new Set(cleanLogs.map(l => getMonthYearKey(l.data)).filter((k): k is string => Boolean(k)))).sort();
-  }, [cleanLogs]);
-
-  // 2. Filter by sector (handles 87 solo, 88_89_90 unified, and todos)
-  const sectorLogs = useMemo(() => {
-    return cleanLogs.filter(log => isLogMatchingSector(log.setor, activeSectorId, log.atividade));
-  }, [cleanLogs, activeSectorId]);
-
-  // 3. Filter by temporal period (diario, semanal, mensal, todos)
-  const filteredLogs = useMemo(() => {
-    return filterLogsByPeriod(sectorLogs, temporalPeriod, selectedDate, selectedWeek, selectedMonthKey);
-  }, [sectorLogs, temporalPeriod, selectedDate, selectedWeek, selectedMonthKey]);
+  const {
+    filtered: filteredLogs,
+    cleanLogs,
+    availableWeeks,
+    availableMonths,
+    period: temporalPeriod,
+    setPeriod: setTemporalPeriod,
+    selectedDate,
+    setSelectedDate,
+    selectedWeek,
+    setSelectedWeek,
+    selectedMonthKey,
+    setSelectedMonthKey,
+  } = useLogFilters(logs, activeSectorId);
 
 
 
@@ -307,9 +281,10 @@ export default function App() {
     setup();
 
     // Subscribe to EventBus
-    EventBus.on('ATIVIDADE_FINALIZADA', (log) => {
+    const unsubscribe = EventBus.on('ATIVIDADE_FINALIZADA', (log) => {
       addToast(`Notificando Torre de Comando: ${log.atividade}`, 'var(--color-info)');
     });
+    return unsubscribe;
   }, []);
 
   // Timer interval to increment elapsed seconds
@@ -337,7 +312,8 @@ export default function App() {
       
       // Secure background Auto-Save draft state to DB every 5 seconds
       if (ticks > 0 && ticks % 5 === 0) {
-        saveState('timerStateDual', prev);
+        // Persist the state computed in this tick; `prev` may contain stale elapsed time.
+        void saveState('timerStateDual', changed ? updated : prev);
         // Visual cue of secure save
         const autoSaveVisual = document.getElementById('visual-cue-save');
         if (autoSaveVisual) {
@@ -746,8 +722,6 @@ export default function App() {
     );
   }
 
-  const isAuthUnlocked = Boolean(user || isGuestMode);
-
   return (
     <div className="terminal-root p-4 md:p-8 flex flex-col items-center relative overflow-hidden">
       
@@ -883,7 +857,7 @@ export default function App() {
                   <button
                     onClick={() => {
                       localStorage.removeItem('repro_local_user');
-                      setUser(null);
+                    logout();
                       addToast("Sessão terminada.", 'var(--color-info)');
                     }}
                     className="px-2 py-1 bg-white/5 border border-white/10 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 rounded-lg cursor-pointer transition-all"
@@ -894,8 +868,7 @@ export default function App() {
               ) : (
                 <button
                   onClick={() => {
-                    setIsGuestMode(false);
-                    localStorage.setItem('repro_guest_mode', 'false');
+                    logout();
                   }}
                   className="px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-black rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold"
                 >
@@ -1224,8 +1197,7 @@ export default function App() {
               requestedTabName="Painel Operacional"
               onNavigateToTab={(t) => handleTabChange(t)}
               onLoginSuccess={(u) => {
-                setUser(u);
-                localStorage.setItem('repro_local_user', JSON.stringify(u));
+                login(u);
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
@@ -1284,8 +1256,7 @@ export default function App() {
               requestedTabName="Histórico de Logs"
               onNavigateToTab={(t) => handleTabChange(t)}
               onLoginSuccess={(u) => {
-                setUser(u);
-                localStorage.setItem('repro_local_user', JSON.stringify(u));
+                login(u);
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
@@ -1315,8 +1286,7 @@ export default function App() {
               requestedTabName="Follow-up Semanal"
               onNavigateToTab={(t) => handleTabChange(t)}
               onLoginSuccess={(u) => {
-                setUser(u);
-                localStorage.setItem('repro_local_user', JSON.stringify(u));
+                login(u);
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
