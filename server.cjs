@@ -4,10 +4,6 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
     for (let key of __getOwnPropNames(from))
@@ -29,138 +25,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var import_express = __toESM(require("express"), 1);
 var import_path = __toESM(require("path"), 1);
 var import_vite = require("vite");
-
-// src/lib/firebase-admin.ts
-var import_app = require("firebase-admin/app");
-var import_auth = require("firebase-admin/auth");
-
-// firebase-applet-config.json
-var firebase_applet_config_default = {
-  projectId: "gen-lang-client-0708272134",
-  appId: "1:602188484294:web:152df4dbdb06a2f7a911c7",
-  apiKey: "AIzaSyAkciOnsQ5KqkOIfMB7ejI2Ovtw-80P1Dk",
-  authDomain: "gen-lang-client-0708272134.firebaseapp.com",
-  storageBucket: "gen-lang-client-0708272134.firebasestorage.app",
-  messagingSenderId: "602188484294",
-  measurementId: ""
-};
-
-// src/lib/firebase-admin.ts
-if (!(0, import_app.getApps)().length) {
-  (0, import_app.initializeApp)({
-    projectId: firebase_applet_config_default.projectId
-  });
-}
-var adminAuth = (0, import_auth.getAuth)();
-
-// src/middleware/auth.ts
-var requireAuth = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Unauthorized: Missing token" });
-  }
-  const token = authHeader.split("Bearer ")[1];
-  try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    req.user = decodedToken;
-    next();
-  } catch (error) {
-    console.error("Error verifying Firebase ID token:", error);
-    return res.status(401).json({ error: "Unauthorized: Invalid token" });
-  }
-};
-
-// src/db/index.ts
-var import_node_postgres = require("drizzle-orm/node-postgres");
-var import_pg = __toESM(require("pg"), 1);
-
-// src/db/schema.ts
-var schema_exports = {};
-__export(schema_exports, {
-  records: () => records,
-  recordsRelations: () => recordsRelations,
-  users: () => users,
-  usersRelations: () => usersRelations
-});
-var import_pg_core = require("drizzle-orm/pg-core");
-var import_drizzle_orm = require("drizzle-orm");
-var users = (0, import_pg_core.pgTable)("users", {
-  id: (0, import_pg_core.integer)("id").primaryKey().generatedAlwaysAsIdentity(),
-  uid: (0, import_pg_core.text)("uid").notNull().unique(),
-  // Firebase Auth UID
-  email: (0, import_pg_core.text)("email").notNull(),
-  name: (0, import_pg_core.text)("name"),
-  createdAt: (0, import_pg_core.timestamp)("created_at").defaultNow()
-});
-var records = (0, import_pg_core.pgTable)("records", {
-  id: (0, import_pg_core.doublePrecision)("id").primaryKey(),
-  // Using double precision to store JavaScript Date.now() + Math.random() safely
-  userId: (0, import_pg_core.integer)("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-  data: (0, import_pg_core.text)("data").notNull(),
-  dia: (0, import_pg_core.text)("dia").notNull(),
-  semana: (0, import_pg_core.integer)("semana").notNull(),
-  atividade: (0, import_pg_core.text)("atividade").notNull(),
-  colaborador: (0, import_pg_core.text)("colaborador").notNull(),
-  setor: (0, import_pg_core.text)("setor"),
-  volumes: (0, import_pg_core.integer)("volumes").notNull(),
-  horas: (0, import_pg_core.doublePrecision)("horas").notNull(),
-  vph: (0, import_pg_core.text)("vph").notNull(),
-  timestamp: (0, import_pg_core.doublePrecision)("timestamp").notNull(),
-  synced: (0, import_pg_core.boolean)("synced").default(true).notNull(),
-  tipo: (0, import_pg_core.text)("tipo").notNull(),
-  // 'direta' | 'indireta'
-  createdAt: (0, import_pg_core.timestamp)("created_at").defaultNow()
-});
-var usersRelations = (0, import_drizzle_orm.relations)(users, ({ many }) => ({
-  records: many(records)
-}));
-var recordsRelations = (0, import_drizzle_orm.relations)(records, ({ one }) => ({
-  user: one(users, {
-    fields: [records.userId],
-    references: [users.id]
-  })
-}));
-
-// src/db/index.ts
-var { Pool } = import_pg.default;
-var createPool = () => {
-  return new Pool({
-    host: process.env.SQL_HOST,
-    user: process.env.SQL_USER,
-    password: process.env.SQL_PASSWORD,
-    database: process.env.SQL_DB_NAME,
-    connectionTimeoutMillis: 15e3
-  });
-};
-var pool = createPool();
-pool.on("error", (err) => {
-  console.error("Unexpected error on idle SQL pool client:", err);
-});
-var db = (0, import_node_postgres.drizzle)(pool, { schema: schema_exports });
-
-// src/db/users.ts
-async function getOrCreateUser(uid, email, name) {
-  try {
-    const result = await db.insert(users).values({
-      uid,
-      email,
-      name: name || null
-    }).onConflictDoUpdate({
-      target: users.uid,
-      set: {
-        email,
-        name: name || null
-      }
-    }).returning();
-    return result[0];
-  } catch (error) {
-    console.error("Database user query failed:", error);
-    throw new Error("Database query failed. Please try again later.", { cause: error });
-  }
-}
-
-// server.ts
-var import_drizzle_orm2 = require("drizzle-orm");
 async function startServer() {
   const app = (0, import_express.default)();
   const PORT = 3e3;
@@ -168,106 +32,49 @@ async function startServer() {
   app.get("/api/health", (req, res) => {
     res.json({ status: "OK", timestamp: (/* @__PURE__ */ new Date()).toISOString() });
   });
-  app.post("/api/auth/sync-user", requireAuth, async (req, res) => {
+  app.get("/api/sheets/proxy", async (req, res) => {
     try {
-      const uid = req.user.uid;
-      const email = req.user.email || "";
-      const name = req.user.name || "";
-      const dbUser = await getOrCreateUser(uid, email, name);
-      res.json({ status: "success", user: dbUser });
+      const { apiUrl } = req.query;
+      if (!apiUrl || typeof apiUrl !== "string" || !apiUrl.startsWith("http")) {
+        return res.status(400).json({ error: "URL da API do Google Sheets inv\xE1lida ou ausente." });
+      }
+      const response = await fetch(apiUrl, {
+        method: "GET",
+        headers: { "Accept": "text/csv, text/plain, application/json, */*" }
+      });
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const data = await response.json();
+        return res.json(data);
+      } else {
+        const text = await response.text();
+        try {
+          const json = JSON.parse(text);
+          return res.json(json);
+        } catch {
+          return res.send(text);
+        }
+      }
     } catch (err) {
-      console.error("Sync user error:", err);
-      res.status(500).json({ error: err.message });
+      console.error("Sheets proxy GET error:", err);
+      res.status(500).json({ error: `Erro na comunica\xE7\xE3o do servidor com Google Sheets: ${err.message}` });
     }
   });
-  app.get("/api/records", requireAuth, async (req, res) => {
+  app.post("/api/sheets/proxy", async (req, res) => {
     try {
-      const uid = req.user.uid;
-      const dbUser = await getOrCreateUser(uid, req.user.email || "");
-      const userRecords = await db.select().from(records).where((0, import_drizzle_orm2.eq)(records.userId, dbUser.id)).orderBy(records.timestamp);
-      res.json(userRecords);
-    } catch (err) {
-      console.error("Fetch records error:", err);
-      res.status(500).json({ error: err.message });
-    }
-  });
-  app.post("/api/records/sync", requireAuth, async (req, res) => {
-    try {
-      const { logs } = req.body;
-      if (!logs || !Array.isArray(logs)) {
-        return res.status(400).json({ error: "Invalid logs payload" });
+      const { apiUrl, payload } = req.body;
+      if (!apiUrl || typeof apiUrl !== "string" || !apiUrl.startsWith("http")) {
+        return res.status(400).json({ error: "URL da API do Google Sheets inv\xE1lida ou ausente." });
       }
-      const uid = req.user.uid;
-      const dbUser = await getOrCreateUser(uid, req.user.email || "");
-      const syncedLogs = [];
-      for (const log of logs) {
-        const result = await db.insert(records).values({
-          id: log.id,
-          userId: dbUser.id,
-          data: log.data,
-          dia: log.dia,
-          semana: log.semana,
-          atividade: log.atividade,
-          colaborador: log.colaborador,
-          setor: log.setor || null,
-          volumes: log.volumes,
-          horas: log.horas,
-          vph: log.vph,
-          timestamp: log.timestamp,
-          synced: true,
-          tipo: log.tipo
-        }).onConflictDoUpdate({
-          target: records.id,
-          set: {
-            data: log.data,
-            dia: log.dia,
-            semana: log.semana,
-            atividade: log.atividade,
-            colaborador: log.colaborador,
-            setor: log.setor || null,
-            volumes: log.volumes,
-            horas: log.horas,
-            vph: log.vph,
-            timestamp: log.timestamp,
-            synced: true,
-            tipo: log.tipo
-          }
-        }).returning();
-        syncedLogs.push(result[0]);
-      }
-      res.json({ status: "success", count: syncedLogs.length, logs: syncedLogs });
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload || {})
+      });
+      res.json({ status: "success", statusCode: response.status, ok: response.ok });
     } catch (err) {
-      console.error("Sync records error:", err);
-      res.status(500).json({ error: err.message });
-    }
-  });
-  app.delete("/api/records/:id", requireAuth, async (req, res) => {
-    try {
-      const id = parseFloat(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: "Invalid record ID" });
-      }
-      const uid = req.user.uid;
-      const dbUser = await getOrCreateUser(uid, req.user.email || "");
-      const result = await db.delete(records).where((0, import_drizzle_orm2.and)((0, import_drizzle_orm2.eq)(records.id, id), (0, import_drizzle_orm2.eq)(records.userId, dbUser.id))).returning();
-      if (result.length === 0) {
-        return res.status(404).json({ error: "Record not found or unauthorized" });
-      }
-      res.json({ status: "success", deletedId: id });
-    } catch (err) {
-      console.error("Delete record error:", err);
-      res.status(500).json({ error: err.message });
-    }
-  });
-  app.delete("/api/records", requireAuth, async (req, res) => {
-    try {
-      const uid = req.user.uid;
-      const dbUser = await getOrCreateUser(uid, req.user.email || "");
-      await db.delete(records).where((0, import_drizzle_orm2.eq)(records.userId, dbUser.id));
-      res.json({ status: "success" });
-    } catch (err) {
-      console.error("Clear records error:", err);
-      res.status(500).json({ error: err.message });
+      console.error("Sheets proxy POST error:", err);
+      res.status(500).json({ error: `Erro ao enviar dados para Google Sheets via servidor: ${err.message}` });
     }
   });
   if (process.env.NODE_ENV !== "production") {
