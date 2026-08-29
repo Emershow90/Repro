@@ -5,27 +5,19 @@
 
 import { Log } from './types';
 
-export interface AppEvents {
-  ATIVIDADE_FINALIZADA: Log;
-}
-
-export type EventCallback<T> = (data: T) => void;
+export type EventCallback = (data: Log) => void;
 
 class EventBusClass {
-  private listeners: { [K in keyof AppEvents]?: Set<EventCallback<AppEvents[K]>> } = {};
+  private listeners: { [event: string]: EventCallback[] } = {};
 
-  on<K extends keyof AppEvents>(event: K, callback: EventCallback<AppEvents[K]>): () => void {
-    const listeners = this.listeners[event] ?? new Set<EventCallback<AppEvents[K]>>();
-    listeners.add(callback);
-    this.listeners[event] = listeners;
-    return () => this.off(event, callback);
+  on(event: string, callback: EventCallback) {
+    if (!this.listeners[event]) {
+      this.listeners[event] = [];
+    }
+    this.listeners[event].push(callback);
   }
 
-  off<K extends keyof AppEvents>(event: K, callback: EventCallback<AppEvents[K]>) {
-    this.listeners[event]?.delete(callback);
-  }
-
-  emit<K extends keyof AppEvents>(event: K, data: AppEvents[K]) {
+  emit(event: string, data: Log) {
     console.log(`[EVENT BUS] Dispatched: ${event}`, data);
     if (this.listeners[event]) {
       this.listeners[event].forEach(cb => {

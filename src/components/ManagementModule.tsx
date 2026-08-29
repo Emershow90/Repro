@@ -33,7 +33,13 @@ import {
   MapPin,
   Flame,
   Award,
-  CheckCheck
+  CheckCheck,
+  Moon,
+  Wifi,
+  WifiOff,
+  Laptop,
+  Smartphone,
+  Radio
 } from 'lucide-react';
 import { 
   formatDateToBR, 
@@ -51,6 +57,8 @@ import {
 } from '../data/streetData';
 import { getState, saveState, getOperationalSyncQueue, clearOperationalSyncQueue } from '../dbLocal';
 import AppsScriptHelper from './AppsScriptHelper';
+import DiagnosticsTelemetryView from './DiagnosticsTelemetryView';
+import { useUIStore } from '../stores/uiStore';
 
 interface ManagementModuleProps {
   logs: Log[];
@@ -58,6 +66,10 @@ interface ManagementModuleProps {
   apiUrl: string;
   onApiUrlChange: (url: string) => void;
   onAddToast: (msg: string, color?: string) => void;
+  lastSyncTimestamp?: string;
+  isSyncing?: boolean;
+  onTriggerSync?: () => Promise<void>;
+  networkStatus?: 'online' | 'offline';
 }
 
 const STORAGE_DEMANDS_KEY = 'repro_demands_v5';
@@ -69,7 +81,11 @@ export default function ManagementModule({
   activeSectorId,
   apiUrl,
   onApiUrlChange,
-  onAddToast
+  onAddToast,
+  lastSyncTimestamp: externalLastSync,
+  isSyncing: externalIsSyncing,
+  onTriggerSync,
+  networkStatus = 'online'
 }: ManagementModuleProps) {
   // Filtros
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -82,7 +98,14 @@ export default function ManagementModule({
 
   const [selectedSector, setSelectedSector] = useState<string>('TODOS');
   const [searchFilter, setSearchFilter] = useState('');
-  const [activeSubView, setActiveSubView] = useState<'resumo' | 'eventos' | 'repro' | 'sheets'>('resumo');
+  const [activeSubView, setActiveSubView] = useState<'resumo' | 'eventos' | 'repro' | 'sheets' | 'diagnostico'>('resumo');
+
+  const {
+    screensaverEnabled,
+    screensaverTimeout,
+    updateScreensaverEnabled,
+    updateScreensaverTimeout
+  } = useUIStore();
 
   // Estados locais recuperados do IndexedDB
   const [demands, setDemands] = useState<Record<string, ReproDemand>>({});
@@ -92,7 +115,9 @@ export default function ManagementModule({
 
   // Sincronização
   const [isSyncingSheets, setIsSyncingSheets] = useState(false);
-  const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string | null>(null);
+  const [internalLastSync, setInternalLastSync] = useState<string | null>(null);
+  const lastSyncTimestamp = externalLastSync || internalLastSync;
+  const isCurrentlySyncing = Boolean(externalIsSyncing || isSyncingSheets);
   const [syncLogsResult, setSyncLogsResult] = useState<{ success: number; errors: number } | null>(null);
 
   // Carregar dados locais do IndexedDB
@@ -276,7 +301,7 @@ export default function ManagementModule({
         await clearOperationalSyncQueue(processedIds);
         setSyncQueueItems(await getOperationalSyncQueue());
 
-        setLastSyncTimestamp(new Date().toLocaleTimeString('pt-BR'));
+        setInternalLastSync(new Date().toLocaleTimeString('pt-BR'));
         setSyncLogsResult({ success: streetSummaries.length, errors: 0 });
         onAddToast(`Dados consolidados enviados com sucesso para o Google Sheets!`, 'var(--color-success)');
       } else {
@@ -432,7 +457,20 @@ export default function ManagementModule({
           }`}
         >
           <FileSpreadsheet size={14} />
-          <span>Configuração Google Sheets</span>
+          <span>Configuração Sheets</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubView('diagnostico')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeSubView === 'diagnostico'
+              ? 'bg-gradient-to-r from-emerald-500 to-cyan-500 text-black shadow-md'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <ShieldCheck size={14} />
+          <span>Performance & Diagnóstico</span>
         </button>
       </div>
 
@@ -660,9 +698,106 @@ export default function ManagementModule({
         </div>
       )}
 
-      {/* 6. CONTEÚDO DA SUB-VISÃO: CONFIGURAÇÃO GOOGLE SHEETS */}
+      {/* 6. CONTEÚDO DA SUB-VISÃO: CONFIGURAÇÃO GOOGLE SHEETS & SINCRONIZAÇÃO MULTI-MÁQUINA */}
       {activeSubView === 'sheets' && (
         <div className="space-y-4">
+          {/* Card Central de Sincronização Multi-Dispositivo Simultânea */}
+          <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 border border-emerald-500/40 shadow-xl space-y-4 font-mono">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                  <Radio size={22} className={networkStatus === 'online' ? 'animate-pulse' : ''} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-sm font-black text-white uppercase tracking-wider">
+                      Sincronização Multi-Dispositivo Simultânea (PDT ↔ PC ↔ Planilha)
+                    </h2>
+                    {networkStatus === 'online' ? (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[0.62rem] font-black flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                        ONLINE ATIVO
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 text-[0.62rem] font-black flex items-center gap-1">
+                        <WifiOff size={10} />
+                        OFFLINE
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[0.7rem] text-slate-400 mt-0.5">
+                    Transmissão e recebimento de dados simultâneos entre múltiplos computadores e coletores Zebra/PDT.
+                  </p>
+                </div>
+              </div>
+
+              {/* Botão Forçar Sincronismo Imediato */}
+              <button
+                type="button"
+                onClick={async () => {
+                  if (onTriggerSync) {
+                    await onTriggerSync();
+                  } else {
+                    await handleSyncToSheets();
+                  }
+                }}
+                disabled={isCurrentlySyncing}
+                className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black text-xs font-black uppercase rounded-xl border border-emerald-300 shadow-lg shadow-emerald-500/20 flex items-center gap-2 cursor-pointer transition-all active:scale-95"
+              >
+                <RefreshCw size={14} className={isCurrentlySyncing ? 'animate-spin' : ''} />
+                <span>{isCurrentlySyncing ? 'Sincronizando Agora...' : 'Sincronizar Simultâneo Agora'}</span>
+              </button>
+            </div>
+
+            {/* Painel Explicativo de Arquitetura Multi-Máquina */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-white/10 space-y-1">
+                <div className="flex items-center gap-1.5 text-emerald-400 text-xs font-bold uppercase">
+                  <Smartphone size={14} />
+                  <span>1. Coletor / PDT em Campo</span>
+                </div>
+                <p className="text-[0.65rem] text-slate-400 leading-relaxed">
+                  Ao bipejar ou apontar uma rua no Zebra/PDT, o registro é salvo localmente e enviado imediatamente para a nuvem/planilha.
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-white/10 space-y-1">
+                <div className="flex items-center gap-1.5 text-cyan-400 text-xs font-bold uppercase">
+                  <Laptop size={14} />
+                  <span>2. Computador / Painel Torre</span>
+                </div>
+                <p className="text-[0.65rem] text-slate-400 leading-relaxed">
+                  Outro PC ou máquina online recebe os dados automaticamente a cada 30 segundos ou ao focar a aba, atualizando totais e gráficos.
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-white/10 space-y-1">
+                <div className="flex items-center gap-1.5 text-purple-400 text-xs font-bold uppercase">
+                  <FileSpreadsheet size={14} />
+                  <span>3. Planilha Google Central</span>
+                </div>
+                <p className="text-[0.65rem] text-slate-400 leading-relaxed">
+                  Atua como banco mestre unificado (aba <strong className="text-white">Controle de horas - Repro</strong>), consolidando todos os turnos.
+                </p>
+              </div>
+            </div>
+
+            {/* Métricas da Sincronização em Tempo Real */}
+            <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-white/10 text-xs">
+              <div className="flex items-center gap-4 flex-wrap">
+                <span className="text-slate-400">
+                  Última sincronização: <strong className="text-emerald-400">{lastSyncTimestamp || 'Conectando...'}</strong>
+                </span>
+                <span className="text-slate-400">
+                  Registros unificados na base: <strong className="text-white">{logs.length}</strong>
+                </span>
+                <span className="text-slate-400">
+                  Auto-sync em background: <strong className="text-emerald-400">Ativo (30s)</strong>
+                </span>
+              </div>
+            </div>
+          </div>
+
           <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-3">
             <h2 className="text-xs font-black text-white uppercase flex items-center gap-1.5">
               <FileSpreadsheet size={15} className="text-emerald-400" />
@@ -699,9 +834,73 @@ export default function ManagementModule({
             )}
           </div>
 
+          {/* Configuração do Descanso de Tela (Screensaver) */}
+          <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-4 font-mono">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="space-y-0.5">
+                <h2 className="text-xs font-black text-white uppercase flex items-center gap-1.5">
+                  <Moon size={15} className={screensaverEnabled ? 'text-purple-400' : 'text-slate-400'} />
+                  <span>Descanso de Tela / Economia de Energia</span>
+                </h2>
+                <p className="text-[0.65rem] text-slate-400">
+                  Controle a inatividade automática para coletores Zebra e terminais de operação.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => updateScreensaverEnabled(!screensaverEnabled, onAddToast)}
+                className={`px-4 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-2 cursor-pointer transition-all ${
+                  screensaverEnabled 
+                    ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/25' 
+                    : 'bg-slate-900 border border-white/20 text-slate-400 hover:text-white'
+                }`}
+              >
+                <Moon size={14} className={screensaverEnabled ? 'text-white' : 'text-slate-400'} />
+                <span>{screensaverEnabled ? 'ATIVADO' : 'DESATIVADO'}</span>
+              </button>
+            </div>
+
+            <div className="border-t border-white/10 pt-3 space-y-2">
+              <label className="text-[0.65rem] font-bold text-slate-300 uppercase flex items-center gap-1.5">
+                <Clock size={12} className="text-emerald-400" />
+                <span>Tempo de Inatividade para Disparar:</span>
+              </label>
+
+              <div className="flex items-center flex-wrap gap-1.5">
+                {[1, 2, 5, 10, 15, 30].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    disabled={!screensaverEnabled}
+                    onClick={() => updateScreensaverTimeout(mins, onAddToast)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                      screensaverTimeout === mins && screensaverEnabled
+                        ? 'bg-emerald-500 text-black font-black shadow-md'
+                        : 'bg-slate-900 border border-white/10 text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    {mins} {mins === 1 ? 'minuto' : 'minutos'}
+                  </button>
+                ))}
+              </div>
+
+              <p className="text-[0.6rem] text-slate-500 pt-1">
+                {screensaverEnabled 
+                  ? `O protetor de tela será acionado após ${screensaverTimeout} minutos sem interação do usuário.` 
+                  : 'O protetor de tela está completamente DESATIVADO. O aplicativo nunca bloqueará a tela automaticamente.'}
+              </p>
+            </div>
+          </div>
+
           {/* Script pronto para colar no Google Apps Script */}
           <AppsScriptHelper />
         </div>
+      )}
+
+      {/* 7. CONTEÚDO DA SUB-VISÃO: PERFORMANCE & DIAGNÓSTICO */}
+      {activeSubView === 'diagnostico' && (
+        <DiagnosticsTelemetryView />
       )}
 
     </div>

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, ChangeEvent } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, ChangeEvent } from 'react';
 import { Wifi, WifiOff, Cloud, Database, RefreshCw, AlertCircle, LogIn, LogOut, Loader2, Key } from 'lucide-react';
 import { Log, AppTimerState } from './types';
 import {
@@ -38,9 +38,14 @@ import StreetReplenishmentModule from './components/StreetReplenishmentModule';
 import ManagementModule from './components/ManagementModule';
 import ErrorBoundary from './components/ErrorBoundary';
 import Screensaver from './components/Screensaver';
-import FormModalFloatingButton from './components/FormModalFloatingButton';
-import { useAuthSession } from './hooks/useAuthSession';
-import { useLogFilters } from './hooks/useLogFilters';
+import { 
+  deduplicateLogs, 
+  isLogMatchingSector, 
+  filterLogsByPeriod, 
+  PeriodType, 
+  getMonthYearKey, 
+  formatDateToPt 
+} from './utils/logUtils';
 import { 
   LayoutDashboard, 
   History, 
@@ -55,7 +60,8 @@ import {
   Clock,
   Layers,
   FileSpreadsheet,
-  Cpu
+  Cpu,
+  Moon
 } from 'lucide-react';
 
 const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
@@ -90,8 +96,13 @@ interface Toast {
 export default function App() {
   const [dbReady, setDbReady] = useState(false);
   
+  // Authentication states (Local User or null)
+  const [user, setUser] = useState<any>(() => {
+    const saved = localStorage.getItem('repro_local_user');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [loadingUser, setLoadingUser] = useState(false);
-  const { user, isGuest: isGuestMode, isUnlocked: isAuthUnlocked, login, logout } = useAuthSession();
+  const [isGuestMode, setIsGuestMode] = useState(() => localStorage.getItem('repro_guest_mode') === 'true');
 
   // Zustand Stores
   const { activeSectorId, childActiveSector, updateActiveSector } = useSectorStore();
@@ -124,8 +135,22 @@ export default function App() {
     setIsImporting,
   } = useHistoryStore();
 
-  const defaultSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2/pubhtml?gid=357189506&single=true';
-  const [apiUrl, setApiUrl] = useState(localStorage.getItem('repro_sheets_api_url') || defaultSheetUrl);
+  const defaultSheetUrl = 'https://script.google.com/macros/s/AKfycbwzg8jDY71b5sMc6Q_qMii3YYQrdyKROuPe9l24iyEtke1Zhx9cCEt1R7xhxmtjN5aK2A/exec';
+  const [apiUrl, setApiUrl] = useState(() => {
+    const saved = localStorage.getItem('repro_sheets_api_url');
+    if (!saved || saved.includes('2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2')) {
+      localStorage.setItem('repro_sheets_api_url', defaultSheetUrl);
+      return defaultSheetUrl;
+    }
+    return saved;
+  });
+
+  const isSyncingRef = useRef(false);
+  const lastAutoSyncTimeRef = useRef(0);
+  const apiUrlRef = useRef(apiUrl);
+  apiUrlRef.current = apiUrl;
+  const userRef = useRef(user);
+  userRef.current = user;
   
   const [timerState, setTimerState] = useState<AppTimerState>({
     cronometro: { ativo: false, inicio: 0, segundos: 0, atividade: '', botaoId: '', tipo: 'direta' },
@@ -157,20 +182,35 @@ export default function App() {
     storeUpdateScreensaverTimeout(timeout, addToast);
   };
 
-  const {
-    filtered: filteredLogs,
-    cleanLogs,
-    availableWeeks,
-    availableMonths,
-    period: temporalPeriod,
-    setPeriod: setTemporalPeriod,
-    selectedDate,
-    setSelectedDate,
-    selectedWeek,
-    setSelectedWeek,
-    selectedMonthKey,
-    setSelectedMonthKey,
-  } = useLogFilters(logs, activeSectorId);
+  // Temporal Filter State for Dashboard
+  const [temporalPeriod, setTemporalPeriod] = useState<PeriodType>('todos');
+  const [selectedDate, setSelectedDate] = useState<string>(() => formatDateToPt(new Date()));
+  const [selectedWeek, setSelectedWeek] = useState<number>(() => getWeekNumber(new Date()));
+  const [selectedMonthKey, setSelectedMonthKey] = useState<string>(() => getMonthYearKey(formatDateToPt(new Date())));
+
+  // 1. Clean deduplicated logs (no repetitive records)
+  const cleanLogs = useMemo(() => {
+    return deduplicateLogs(logs);
+  }, [logs]);
+
+  // Available weeks & months derived from clean data
+  const availableWeeks = useMemo(() => {
+    return Array.from(new Set(cleanLogs.map(l => Number(l.semana)))).sort((a, b) => Number(b) - Number(a));
+  }, [cleanLogs]);
+
+  const availableMonths = useMemo(() => {
+    return Array.from(new Set(cleanLogs.map(l => getMonthYearKey(l.data)).filter((k): k is string => Boolean(k)))).sort();
+  }, [cleanLogs]);
+
+  // 2. Filter by sector (handles 87 solo, 88_89_90 unified, and todos)
+  const sectorLogs = useMemo(() => {
+    return cleanLogs.filter(log => isLogMatchingSector(log.setor, activeSectorId, log.atividade));
+  }, [cleanLogs, activeSectorId]);
+
+  // 3. Filter by temporal period (diario, semanal, mensal, todos)
+  const filteredLogs = useMemo(() => {
+    return filterLogsByPeriod(sectorLogs, temporalPeriod, selectedDate, selectedWeek, selectedMonthKey);
+  }, [sectorLogs, temporalPeriod, selectedDate, selectedWeek, selectedMonthKey]);
 
 
 
@@ -198,16 +238,24 @@ export default function App() {
     };
   }, []);
 
-  // Idle timer for Screensaver
+  // Idle timer for Screensaver (Desativado se screensaverEnabled for falso)
   useEffect(() => {
-    if (!screensaverEnabled || screensaverActive) return;
+    if (!screensaverEnabled) {
+      if (screensaverActive) {
+        setScreensaverActive(false);
+      }
+      return;
+    }
+    if (screensaverActive) return;
 
     let idleTimer: any;
 
     const resetIdleTimer = () => {
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
-        setScreensaverActive(true);
+        if (screensaverEnabled) {
+          setScreensaverActive(true);
+        }
       }, screensaverTimeout * 60 * 1000);
     };
 
@@ -220,7 +268,7 @@ export default function App() {
       clearTimeout(idleTimer);
       events.forEach(evt => window.removeEventListener(evt, resetIdleTimer));
     };
-  }, [screensaverEnabled, screensaverTimeout, screensaverActive]);
+  }, [screensaverEnabled, screensaverTimeout, screensaverActive, setScreensaverActive]);
 
   // Initialize DB and load session state
   useEffect(() => {
@@ -281,10 +329,9 @@ export default function App() {
     setup();
 
     // Subscribe to EventBus
-    const unsubscribe = EventBus.on('ATIVIDADE_FINALIZADA', (log) => {
+    EventBus.on('ATIVIDADE_FINALIZADA', (log) => {
       addToast(`Notificando Torre de Comando: ${log.atividade}`, 'var(--color-info)');
     });
-    return unsubscribe;
   }, []);
 
   // Timer interval to increment elapsed seconds
@@ -312,8 +359,7 @@ export default function App() {
       
       // Secure background Auto-Save draft state to DB every 5 seconds
       if (ticks > 0 && ticks % 5 === 0) {
-        // Persist the state computed in this tick; `prev` may contain stale elapsed time.
-        void saveState('timerStateDual', changed ? updated : prev);
+        saveState('timerStateDual', prev);
         // Visual cue of secure save
         const autoSaveVisual = document.getElementById('visual-cue-save');
         if (autoSaveVisual) {
@@ -327,47 +373,137 @@ export default function App() {
     });
   }, [ticks, dbReady]);
 
-  // Synchronize queue
-  const sincronizarFila = async (forcarAlerta = false) => {
-    if (isSyncing) return;
+  // Sincronização Bidirecional Multi-Dispositivo (PDT ↔ PC ↔ Google Sheets / Nuvem)
+  const syncMultiDevice = useCallback(async (options: { silent?: boolean; forceAlert?: boolean } = {}) => {
+    const { silent = false, forceAlert = false } = options;
+    const currentApiUrl = apiUrlRef.current;
+    const currentUserObj = userRef.current;
+
+    if (isSyncingRef.current) return;
+
+    // Se for sincronização automática silenciosa em background, garante intervalo de segurança
+    const nowMs = Date.now();
+    if (silent && !forceAlert && nowMs - lastAutoSyncTimeRef.current < 15000) {
+      return;
+    }
+
     if (!navigator.onLine) {
       setNetworkStatus('offline');
-      if (forcarAlerta) {
-        addToast("Sem conexao à Internet. Sincronizacao retida.", 'var(--color-warning)');
+      if (forceAlert) {
+        addToast("Sem ligação à Internet. Sincronização retida localmente.", 'var(--color-warning)');
       }
       return;
     }
     setNetworkStatus('online');
 
-    if (!apiUrl) {
-      if (forcarAlerta) {
-        addToast("URL de ligacao nao configurada.", 'var(--color-warning)');
+    if (!currentApiUrl) {
+      if (forceAlert) {
+        addToast("URL da planilha Google não configurada em Gestão & Sheets.", 'var(--color-warning)');
       }
       return;
     }
 
+    isSyncingRef.current = true;
+    lastAutoSyncTimeRef.current = nowMs;
     setIsSyncing(true);
-    try {
-      const result = await syncOfflineQueue(apiUrl);
-      const updatedLogs = await getLogs();
-      setLogs(updatedLogs);
 
-      if (result.successCount > 0) {
-        const now = new Date();
-        setLastSyncTime(now.toLocaleTimeString('pt-PT'));
-        addToast(`${result.successCount} registos enviados à planilha Google!`, 'var(--color-success)');
-      } else if (forcarAlerta && result.failedCount === 0) {
-        addToast("Fila limpa. Tudo sincronizado.", 'var(--color-success)');
-      } else if (result.failedCount > 0) {
-        addToast("A ligacao ao Google falhou. Retentando em background...", 'var(--color-danger)');
+    if (!silent) {
+      addToast("Sincronizando com a planilha e outros terminais...", 'var(--color-info)');
+    }
+
+    try {
+      // 1. Enviar registros pendentes locais para a planilha / nuvem
+      const queueResult = await syncOfflineQueue(currentApiUrl);
+
+      // 2. Buscar registros remotos recentes (gerados por outros PDTs ou PCs)
+      let importedCount = 0;
+      try {
+        const cloudLogs = await fetchFromCloud(currentApiUrl, currentUserObj?.id || currentUserObj?.uid);
+        const localLogs = await getLogs();
+        const localIds = new Set(localLogs.map(l => String(l.id)));
+        const localSignatures = new Set(localLogs.map(l => `${l.data}_${l.setor}_${l.colaborador}_${l.atividade}_${l.horas}_${l.volumes}`));
+
+        for (const remote of cloudLogs) {
+          const remoteIdStr = String(remote.id);
+          const remoteSig = `${remote.data}_${remote.setor}_${remote.colaborador}_${remote.atividade}_${remote.horas}_${remote.volumes}`;
+
+          if (!localIds.has(remoteIdStr) && !localSignatures.has(remoteSig)) {
+            await saveLog({ ...remote, synced: true });
+            importedCount++;
+          }
+        }
+      } catch (pullErr) {
+        console.warn("Pull remoto em segundo plano:", pullErr);
       }
-    } catch (err) {
-      console.error(err);
-      addToast("Erro ao sincronizar. Verifique as configuracoes.", 'var(--color-danger)');
+
+      // 3. Atualizar estado com todos os logs locais unificados
+      const refreshedLogs = await getLogs();
+      setLogs(refreshedLogs);
+
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      setLastSyncTime(timeStr);
+
+      if (!silent) {
+        if (importedCount > 0 || queueResult.successCount > 0) {
+          addToast(`Sincronizado! ${queueResult.successCount} enviados, ${importedCount} recebidos de outros dispositivos.`, 'var(--color-success)');
+        } else if (forceAlert) {
+          addToast("Base já sincronizada com a nuvem e outras máquinas.", 'var(--color-info)');
+        }
+      } else if (importedCount > 0) {
+        addToast(`📡 ${importedCount} novo(s) registro(s) recebido(s) de outro terminal!`, 'var(--color-success)');
+      }
+    } catch (err: any) {
+      console.error('Erro na sincronização multi-dispositivo:', err);
+      if (!silent || forceAlert) {
+        addToast(`Falha ao sincronizar: ${err?.message || 'Erro de conexão'}`, 'var(--color-danger)');
+      }
     } finally {
+      isSyncingRef.current = false;
       setIsSyncing(false);
     }
-  };
+  }, [setNetworkStatus, addToast, setLogs, setLastSyncTime, setIsSyncing]);
+
+  // Synchronize queue wrapper for backward compatibility
+  const sincronizarFila = useCallback(async (forcarAlerta = false) => {
+    await syncMultiDevice({ silent: !forcarAlerta, forceAlert: forcarAlerta });
+  }, [syncMultiDevice]);
+
+  // Trigger import from Google Sheets wrapper
+  const importarPlanilha = useCallback(async () => {
+    await syncMultiDevice({ silent: false, forceAlert: true });
+  }, [syncMultiDevice]);
+
+  // Intervalo de Sincronização Automática em Segundo Plano (Multi-Máquinas Online)
+  useEffect(() => {
+    if (!apiUrl || !dbReady) return;
+
+    // Sincronização inicial silenciosa
+    syncMultiDevice({ silent: true });
+
+    // Sincronização periódica a cada 30 segundos
+    const syncInterval = setInterval(() => {
+      if (navigator.onLine && document.visibilityState === 'visible') {
+        syncMultiDevice({ silent: true });
+      }
+    }, 30000);
+
+    // Sincronização ao retornar para a janela ou reconectar
+    const handleFocus = () => {
+      if (navigator.onLine && document.visibilityState === 'visible') {
+        syncMultiDevice({ silent: true });
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
+
+    return () => {
+      clearInterval(syncInterval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
+    };
+  }, [apiUrl, dbReady, syncMultiDevice]);
 
   // Retry synchronization for a single log
   const handleRetrySyncLog = async (log: Log) => {
@@ -389,44 +525,6 @@ export default function App() {
     } catch (err) {
       console.error('Error retrying log sync:', err);
       addToast(`Erro ao tentar sincronizar o registo #${log.id}.`, 'var(--color-danger)');
-    }
-  };
-
-  // Trigger import from Google Sheets
-  const importarPlanilha = async () => {
-    if (isImporting) return;
-    if (!apiUrl) {
-      addToast("Introduza a URL nas configuracoes.", 'var(--color-danger)');
-      return;
-    }
-    setIsImporting(true);
-    addToast("A descarregar dados...", 'var(--color-info)');
-
-    try {
-      const cloudLogs = await fetchFromCloud(apiUrl);
-      const localLogs = await getLogs();
-      let importedCount = 0;
-
-      for (const remote of cloudLogs) {
-        const exists = localLogs.some(l => String(l.id) === String(remote.id));
-        if (!exists) {
-          await saveLog(remote);
-          importedCount++;
-        }
-      }
-
-      if (importedCount > 0) {
-        addToast(`${importedCount} novos registos importados com sucesso!`, 'var(--color-success)');
-        const refreshed = await getLogs();
-        setLogs(refreshed);
-      } else {
-        addToast("A base local ja se encontra atualizada.", 'var(--color-info)');
-      }
-    } catch (err) {
-      console.error(err);
-      addToast("A importacao falhou. Verifique as credenciais e rede.", 'var(--color-danger)');
-    } finally {
-      setIsImporting(false);
     }
   };
 
@@ -722,6 +820,8 @@ export default function App() {
     );
   }
 
+  const isAuthUnlocked = Boolean(user || isGuestMode);
+
   return (
     <div className="terminal-root p-4 md:p-8 flex flex-col items-center relative overflow-hidden">
       
@@ -842,6 +942,20 @@ export default function App() {
             {/* Ações de Restauração & Sessão */}
             <div className="flex flex-wrap items-center gap-2 mt-1 justify-start md:justify-end">
               <button
+                type="button"
+                onClick={() => updateScreensaverEnabled(!screensaverEnabled)}
+                className={`px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem] ${
+                  screensaverEnabled
+                    ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                    : 'bg-white/5 border-white/15 text-slate-400 hover:text-white'
+                }`}
+                title={screensaverEnabled ? 'Descanso de Tela ATIVADO (Clique para desligar)' : 'Descanso de Tela DESLIGADO (Clique para ligar)'}
+              >
+                <Moon size={11} className={screensaverEnabled ? 'text-purple-400' : 'text-slate-400'} />
+                <span>Descanso: {screensaverEnabled ? 'LIGADO' : 'OFF'}</span>
+              </button>
+
+              <button
                 onClick={handleRestoreSystem}
                 disabled={isSyncing}
                 className="px-2.5 py-1 bg-white/5 border border-white/15 text-slate-200 hover:text-emerald-400 hover:border-emerald-500/40 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm"
@@ -857,7 +971,7 @@ export default function App() {
                   <button
                     onClick={() => {
                       localStorage.removeItem('repro_local_user');
-                    logout();
+                      setUser(null);
                       addToast("Sessão terminada.", 'var(--color-info)');
                     }}
                     className="px-2 py-1 bg-white/5 border border-white/10 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 rounded-lg cursor-pointer transition-all"
@@ -868,7 +982,8 @@ export default function App() {
               ) : (
                 <button
                   onClick={() => {
-                    logout();
+                    setIsGuestMode(false);
+                    localStorage.setItem('repro_guest_mode', 'false');
                   }}
                   className="px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-black rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold"
                 >
@@ -1185,6 +1300,10 @@ export default function App() {
                 apiUrl={apiUrl}
                 onApiUrlChange={handleApiUrlChange}
                 onAddToast={addToast}
+                lastSyncTimestamp={lastSyncTime || undefined}
+                isSyncing={isSyncing}
+                onTriggerSync={() => syncMultiDevice({ forceAlert: true })}
+                networkStatus={networkStatus}
               />
             </ErrorBoundary>
           </div>
@@ -1197,7 +1316,8 @@ export default function App() {
               requestedTabName="Painel Operacional"
               onNavigateToTab={(t) => handleTabChange(t)}
               onLoginSuccess={(u) => {
-                login(u);
+                setUser(u);
+                localStorage.setItem('repro_local_user', JSON.stringify(u));
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
@@ -1256,7 +1376,8 @@ export default function App() {
               requestedTabName="Histórico de Logs"
               onNavigateToTab={(t) => handleTabChange(t)}
               onLoginSuccess={(u) => {
-                login(u);
+                setUser(u);
+                localStorage.setItem('repro_local_user', JSON.stringify(u));
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
@@ -1286,7 +1407,8 @@ export default function App() {
               requestedTabName="Follow-up Semanal"
               onNavigateToTab={(t) => handleTabChange(t)}
               onLoginSuccess={(u) => {
-                login(u);
+                setUser(u);
+                localStorage.setItem('repro_local_user', JSON.stringify(u));
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
@@ -1309,7 +1431,7 @@ export default function App() {
 
       </div>
 
-      {screensaverActive && (
+      {screensaverEnabled && screensaverActive && (
         <Screensaver
           onClose={() => setScreensaverActive(false)}
           logs={logs}
@@ -1317,9 +1439,6 @@ export default function App() {
           currentRole={currentRole}
         />
       )}
-
-      {/* FLOATING FORM MODAL BUTTON */}
-      <FormModalFloatingButton formUrl="https://docs.google.com/forms/d/e/1FAIpQLSdIMZqQ2_N7FDheTwynysUK_tcCtZ4ETiUsGmOAFu_V2MFc9w/viewform?usp=dialog" />
     </div>
   );
 }

@@ -28,8 +28,10 @@ import {
   CheckCircle2,
   Sparkles,
   Flame,
-  Award
+  Award,
+  Calculator
 } from 'lucide-react';
+import ReproCalculatorModal from './ReproCalculatorModal';
 import { 
   calculateDurationFromTimes, 
   formatDateToBR, 
@@ -48,6 +50,7 @@ import {
 } from '../data/streetData';
 import { pdtAudio } from '../utils/pdtAudio';
 import { saveState, getState, enqueueOperationalEvent } from '../dbLocal';
+import { useUIStore } from '../stores/uiStore';
 
 interface StreetReplenishmentModuleProps {
   logs: Log[];
@@ -132,10 +135,15 @@ export default function StreetReplenishmentModule({
     return `${y}-${m}-${d}`;
   });
 
-  // Descanso de tela (Screensaver) vs Pausa Operacional
-  const [screensaverEnabled, setScreensaverEnabled] = useState<boolean>(false);
-  const [screensaverActive, setScreensaverActive] = useState<boolean>(false);
-  const [idleTimeoutSeconds] = useState(60);
+  // Descanso de tela (Screensaver Global & Local)
+  const { 
+    screensaverEnabled, 
+    screensaverActive, 
+    screensaverTimeout,
+    setScreensaverActive, 
+    updateScreensaverEnabled 
+  } = useUIStore();
+  const idleTimeoutSeconds = Math.max(30, screensaverTimeout * 60);
 
   // Gamificação Visual & Feedback Efêmero
   const [flashReward, setFlashReward] = useState<string | null>(null);
@@ -153,6 +161,7 @@ export default function StreetReplenishmentModule({
   // Demandas do REPRO
   const [reproDemands, setReproDemands] = useState<Record<string, ReproDemand>>({});
   const [showDemandModal, setShowDemandModal] = useState(false);
+  const [showCalculatorModal, setShowCalculatorModal] = useState(false);
   const [inputDemandValue, setInputDemandValue] = useState<string>('');
   const [inputDemandUnit, setInputDemandUnit] = useState<'CAIXAS' | 'VOLUMES'>('CAIXAS');
 
@@ -359,13 +368,19 @@ export default function StreetReplenishmentModule({
 
   // Screensaver Inatividade Timer (Preserva Cronômetro em Segundo Plano)
   useEffect(() => {
-    if (!screensaverEnabled || screensaverActive) return;
+    if (!screensaverEnabled) {
+      if (screensaverActive) setScreensaverActive(false);
+      return;
+    }
+    if (screensaverActive) return;
 
     let timeoutId: NodeJS.Timeout;
     const resetTimer = () => {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
-        setScreensaverActive(true);
+        if (screensaverEnabled) {
+          setScreensaverActive(true);
+        }
       }, idleTimeoutSeconds * 1000);
     };
 
@@ -377,7 +392,7 @@ export default function StreetReplenishmentModule({
       clearTimeout(timeoutId);
       events.forEach(ev => window.removeEventListener(ev, resetTimer));
     };
-  }, [screensaverEnabled, screensaverActive, idleTimeoutSeconds]);
+  }, [screensaverEnabled, screensaverActive, idleTimeoutSeconds, setScreensaverActive]);
 
   // Disparar Flash Feedback Efêmero
   const triggerFlashFeedback = (msg: string) => {
@@ -635,6 +650,14 @@ export default function StreetReplenishmentModule({
     pdtAudio.triggerHaptic(35);
 
     persistState(addressCount, nextVol, stopwatchActive, stopwatchSeconds, stopwatchStartTs, updatedEvents, effectiveStreet, operationDate, unidadeRealizado, defaultVolPerAddress);
+  };
+
+  // Aplica Caixas calculadas pela Calculadora REPRO (PCB x EU)
+  const handleApplyCalculatorBoxes = (boxes: number, totalPieces: number, pcbVal: number) => {
+    if (boxes > 0) {
+      handleAddVolumeDirect(boxes);
+      onAddToast(`Calculado: +${boxes} ${unidadeRealizado === 'CAIXAS' ? 'cx' : 'vol'} (${totalPieces} peças @ PCB ${pcbVal})`, 'var(--color-terminal-accent)');
+    }
   };
 
   // Microajuste Negativo com Justificativa Rápida
@@ -914,8 +937,8 @@ export default function StreetReplenishmentModule({
     };
   }, [handleKeyDown]);
 
-  // Modo Descanso (Screensaver)
-  if (screensaverActive) {
+  // Modo Descanso (Screensaver) - APENAS se estiver ativado globalmente e em descanso
+  if (screensaverEnabled && screensaverActive) {
     return (
       <div 
         onClick={() => setScreensaverActive(false)}
@@ -1040,10 +1063,7 @@ export default function StreetReplenishmentModule({
           <button
             type="button"
             onClick={() => {
-              const next = !screensaverEnabled;
-              setScreensaverEnabled(next);
-              if (next) onAddToast('Descanso LIGADO (60s)', 'var(--color-terminal-accent)');
-              else onAddToast('Descanso DESLIGADO', 'var(--color-terminal-accent)');
+              updateScreensaverEnabled(!screensaverEnabled, onAddToast);
             }}
             className={`min-h-[34px] px-2 rounded-xl border text-[0.65rem] font-bold flex items-center gap-1 cursor-pointer transition-all ${
               screensaverEnabled 
@@ -1082,17 +1102,29 @@ export default function StreetReplenishmentModule({
             </span>
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              setInputDemandValue(isDemandLoaded ? String(demandValue) : '');
-              setInputDemandUnit(demandUnit || 'CAIXAS');
-              setShowDemandModal(true);
-            }}
-            className="px-2 py-0.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 text-[0.6rem] font-bold uppercase transition-all cursor-pointer"
-          >
-            {isDemandLoaded ? 'Ajustar Demanda' : '+ Carregar Demanda REPRO'}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setShowCalculatorModal(true)}
+              className="px-2 py-0.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 text-[0.6rem] font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
+              title="Calculadora REPRO: PCB (unid/cx) x EU (qtd caixas)"
+            >
+              <Calculator size={11} className="text-cyan-400" />
+              <span>🧮 Calc REPRO</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setInputDemandValue(isDemandLoaded ? String(demandValue) : '');
+                setInputDemandUnit(demandUnit || 'CAIXAS');
+                setShowDemandModal(true);
+              }}
+              className="px-2 py-0.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 text-[0.6rem] font-bold uppercase transition-all cursor-pointer"
+            >
+              {isDemandLoaded ? 'Ajustar Demanda' : '+ Carregar Demanda REPRO'}
+            </button>
+          </div>
         </div>
 
         {/* Grade de Métricas da Demanda */}
@@ -1214,57 +1246,118 @@ export default function StreetReplenishmentModule({
         </button>
       </div>
 
-      {/* 5. BLOCO 5 — CONTROLE, MICROAJUSTES, BUSCA & FINALIZAÇÃO */}
-      <div className="grid grid-cols-12 gap-1.5 pt-0.5 box-border">
+      {/* 5. BLOCO 5 — CARD EXPANDIDO: INCREMENTO INDIVIDUAL & MÚLTIPLOS DE CAIXAS */}
+      <div className="p-3 sm:p-4 rounded-2xl bg-slate-950/95 border-2 border-emerald-500/40 shadow-2xl space-y-3 box-border">
+        
+        {/* Topo do Card: Título + Unidade + Atalho Calculadora REPRO */}
+        <div className="flex items-center justify-between flex-wrap gap-1.5 border-b border-white/10 pb-2.5">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg border border-emerald-500/40">
+              <Box size={18} />
+            </div>
+            <div>
+              <span className="text-xs sm:text-sm font-black text-white uppercase tracking-wider block">
+                Acréscimo de {unidadeRealizado === 'CAIXAS' ? 'Caixas' : 'Volumes'}
+              </span>
+              <span className="text-[0.62rem] text-slate-400">
+                Toque para somar caixas individuais ou múltiplos à rua
+              </span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowCalculatorModal(true)}
+            className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500/20 to-emerald-500/20 hover:from-cyan-500/30 hover:to-emerald-500/30 text-cyan-300 border border-cyan-500/40 text-[0.68rem] font-black uppercase transition-all flex items-center gap-1.5 cursor-pointer shadow-md active:scale-95"
+            title="Abrir Calculadora REPRO (PCB x EU)"
+          >
+            <Calculator size={14} className="text-cyan-400" />
+            <span>🧮 Calc REPRO (PCB × EU)</span>
+          </button>
+        </div>
+
+        {/* Grade de Botões Grandes de Caixas Individuais e Múltiplos */}
+        <div className="grid grid-cols-6 gap-2">
+          {[
+            { label: '+1', amt: 1, color: 'bg-emerald-500/25 hover:bg-emerald-500/40 text-emerald-300 border-emerald-500/60 font-black' },
+            { label: '+2', amt: 2, color: 'bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-300 border-emerald-500/50' },
+            { label: '+3', amt: 3, color: 'bg-teal-500/20 hover:bg-teal-500/35 text-teal-300 border-teal-500/50' },
+            { label: '+5', amt: 5, color: 'bg-cyan-500/20 hover:bg-cyan-500/35 text-cyan-300 border-cyan-500/50' },
+            { label: '+10', amt: 10, color: 'bg-cyan-500/25 hover:bg-cyan-500/40 text-cyan-200 border-cyan-500/60 font-black' },
+            { label: '+20', amt: 20, color: 'bg-blue-500/25 hover:bg-blue-500/40 text-blue-200 border-blue-500/60 font-black' },
+          ].map(btn => (
+            <button
+              key={btn.label}
+              type="button"
+              onClick={() => handleAddVolumeDirect(btn.amt)}
+              className={`min-h-[58px] sm:min-h-[64px] rounded-xl border-2 flex flex-col items-center justify-center p-1.5 cursor-pointer transition-all active:scale-95 shadow-lg ${btn.color}`}
+            >
+              <span className="text-lg sm:text-xl font-black font-mono leading-none">{btn.label}</span>
+              <span className="text-[0.58rem] sm:text-[0.62rem] uppercase opacity-80 font-bold mt-0.5">
+                {unidadeRealizado === 'CAIXAS' ? 'cx' : 'vol'}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Linha de Ações Secundárias: Redução com Justificativa + Adicionar Qtd Manual */}
+        <div className="flex items-center gap-2 pt-1">
+          {/* Redução com justificativa */}
+          <button
+            type="button"
+            onClick={() => setReductionPending({ amount: 1 })}
+            className="flex-1 min-h-[44px] px-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-xl text-xs font-black uppercase flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95"
+            title="Reduzir 1 caixa/volume com justificativa"
+          >
+            <Minus size={14} className="stroke-[3]" />
+            <span>-1 {unidadeRealizado === 'CAIXAS' ? 'cx' : 'vol'} (Avaria/Falta)</span>
+          </button>
+
+          {/* Adicionar Quantidade Customizada */}
+          <button
+            type="button"
+            onClick={() => {
+              const val = prompt(`Digite a quantidade de ${unidadeRealizado === 'CAIXAS' ? 'caixas' : 'volumes'} a adicionar:`, '1');
+              if (val) {
+                const num = parseInt(val, 10);
+                if (!isNaN(num) && num > 0) {
+                  handleAddVolumeDirect(num);
+                }
+              }
+            }}
+            className="px-3.5 min-h-[44px] bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/20 rounded-xl text-xs font-bold uppercase flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95"
+            title="Digitar quantidade exata de caixas"
+          >
+            <Plus size={14} />
+            <span>+Qtd Exata</span>
+          </button>
+        </div>
+
+      </div>
+
+      {/* 6. BLOCO 6 — BARRA DE CONTROLE & FINALIZAÇÃO */}
+      <div className="grid grid-cols-12 gap-2 pt-1 box-border">
         
         {/* Desfazer Último Evento */}
         <button
           type="button"
           onClick={handleUndoLastEvent}
           disabled={eventHistory.length === 0 && addressCount === 0}
-          className="col-span-3 min-h-[42px] px-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 text-rose-300 border border-rose-500/30 rounded-xl text-[0.68rem] font-black uppercase flex items-center justify-center gap-1 cursor-pointer transition-all"
+          className="col-span-4 min-h-[48px] px-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-black uppercase flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95"
         >
-          <Undo2 size={13} />
+          <Undo2 size={15} />
           <span>Desfazer</span>
         </button>
 
-        {/* Microajustes Rápidos de Volume [-1] [+1] [+5] */}
-        <div className="col-span-4 flex items-center gap-1 bg-slate-950 p-0.5 rounded-xl border border-white/15">
-          <button
-            type="button"
-            onClick={() => setReductionPending({ amount: 1 })}
-            className="flex-1 min-h-[38px] bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-black cursor-pointer flex items-center justify-center"
-            title="Reduzir 1 volume (com justificativa)"
-          >
-            -1
-          </button>
-          <button
-            type="button"
-            onClick={() => handleAddVolumeDirect(1)}
-            className="flex-1 min-h-[38px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-black cursor-pointer flex items-center justify-center"
-            title="Adicionar 1 volume"
-          >
-            +1
-          </button>
-          <button
-            type="button"
-            onClick={() => handleAddVolumeDirect(5)}
-            className="flex-1 min-h-[38px] bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-lg text-xs font-black cursor-pointer flex items-center justify-center"
-            title="Adicionar 5 volumes"
-          >
-            +5
-          </button>
-        </div>
-
-        {/* Buscar / Ajustar */}
+        {/* Buscar / Ajustes */}
         <button
           type="button"
           onClick={() => setShowSearchModal(true)}
-          className="col-span-2 min-h-[42px] px-1 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-white/15 rounded-xl text-[0.65rem] font-bold flex items-center justify-center gap-1 cursor-pointer"
+          className="col-span-3 min-h-[48px] px-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-white/15 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
           title="Buscar rua ou alterar unidade"
         >
-          <Search size={12} />
-          <span className="hidden sm:inline">Buscar</span>
+          <Search size={14} />
+          <span>Opções</span>
         </button>
 
         {/* Gravar e Finalizar Rua */}
@@ -1272,11 +1365,12 @@ export default function StreetReplenishmentModule({
           type="button"
           onClick={handleSaveReplenishment}
           disabled={isSubmitting || addressCount === 0}
-          className="col-span-3 min-h-[42px] px-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-110 disabled:opacity-40 text-black font-black text-[0.68rem] uppercase rounded-xl border border-emerald-300 shadow-md flex items-center justify-center gap-1 cursor-pointer transition-all"
+          className="col-span-5 min-h-[48px] px-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-110 disabled:opacity-40 text-black font-black text-xs sm:text-sm uppercase rounded-xl border border-emerald-300 shadow-xl flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95"
         >
-          <CheckCircle2 size={13} />
-          <span>Finalizar</span>
+          <CheckCircle2 size={16} className="stroke-[3]" />
+          <span>Finalizar Rua</span>
         </button>
+
       </div>
 
       {/* MODAL: CARREGAR DEMANDA REPRO */}
@@ -1461,6 +1555,14 @@ export default function StreetReplenishmentModule({
           </div>
         </div>
       )}
+
+      {/* MODAL: CALCULADORA REPRO (PCB x EU) */}
+      <ReproCalculatorModal
+        isOpen={showCalculatorModal}
+        onClose={() => setShowCalculatorModal(false)}
+        onApplyBoxes={handleApplyCalculatorBoxes}
+        initialUnit={unidadeRealizado}
+      />
 
     </div>
   );

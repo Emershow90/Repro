@@ -128,13 +128,61 @@ npm install
 # 2. Executar em ambiente de desenvolvimento local
 npm run dev
 
-# 3. Compilação para produção (gera pasta dist/ pronta para upload ou GitHub Pages)
+# 3. Compilação para produção (gera pasta dist/ pronta para Vercel, Cloud Run ou GitHub Pages)
 npm run build
+
+# 4. Iniciar servidor de produção
+npm start
 ```
 
 ---
 
-## 6. Licença e Garantia Operacional
+## 6. Deploy: GitHub Pages & Vercel (Produção e Prévia)
+
+O projeto está totalmente configurado para publicação contínua tanto no **GitHub Pages** quanto no **Vercel**, com fluxos dedicados de **Produção** e **Prévia (Preview)**.
+
+### 6.1. GitHub Pages (Produção & Prévia)
+
+#### A. Produção Automática (`.github/workflows/deploy.yml`)
+1. No seu repositório no GitHub, acesse **Settings > Pages**.
+2. Em **Build and deployment > Source**, selecione:
+   - **GitHub Actions** (Recomendado) ou Deploy from branch `gh-pages` / `/root`.
+3. A cada `push` na branch `main` ou `master` (ou via acionamento manual em *Actions*):
+   - O workflow compila os arquivos estáticos na pasta `dist/`.
+   - Gera automaticamente o `404.html` (para roteamento SPA) e o arquivo `.nojekyll`.
+   - Publica o site no endereço: `https://<seu-usuario>.github.io/<seu-repositorio>/`.
+
+#### B. Prévia / Validação de Pull Requests (`.github/workflows/preview.yml`)
+- Ao abrir ou atualizar um **Pull Request**, o workflow de **Prévia** valida o typecheck (`npm run lint`), compila o bundle de teste e anexa os artefatos compilados na aba **Actions** do GitHub, além de disponibilizar a versão de preview na branch `gh-pages-preview`.
+
+---
+
+### 6.2. Vercel (Produção & Prévia)
+
+#### Opção A: Deploy Direto via Vercel Dashboard (Automático)
+1. Acesse [vercel.com](https://vercel.com) e clique em **Add New Project**.
+2. Importe o repositório do **GitHub**.
+3. O Vercel detectará as configurações pelo arquivo `vercel.json` (Framework: Vite, Build: `npm run build`, Output: `dist`).
+4. Clique em **Deploy**. A cada Pull Request, o Vercel criará automaticamente uma URL de **Prévia (Preview)** e, ao fazer merge na `main`, publicará em **Produção**.
+
+#### Opção B: Deploy via GitHub Actions CI/CD (`.github/workflows/deploy-vercel.yml`)
+1. No repositório GitHub, acesse **Settings > Secrets and variables > Actions**.
+2. Configure as variáveis `VERCEL_TOKEN`, `VERCEL_ORG_ID` e `VERCEL_PROJECT_ID`.
+3. O pipeline efetuará o deploy automático com verificação prévia de código.
+
+---
+
+## 7. Documentação & Manuais
+
+O sistema conta com documentação completa para desenvolvedores, líderes e operadores:
+*   📖 **Documentação Completa do Sistema:** [docs/DOCUMENTACAO_COMPLETA_SISTEMA.md](docs/DOCUMENTACAO_COMPLETA_SISTEMA.md) (Arquitetura, módulos, fórmulas de VPH/EPH, esquema de banco e troubleshooting).
+*   📊 **Manual do Follow-up Semanal:** [DOCUMENTACAO_FOLLOWUP_SEMANAL.md](DOCUMENTACAO_FOLLOWUP_SEMANAL.md) (Consolidação de setores 87-90, relatórios e KPIs).
+*   ⏱️ **Manual da Tela Operacional:** [docs/operacional.md](docs/operacional.md) (Guia do operador para cronometragem e apontamento).
+*   🗄️ **Esquema SQL Supabase:** [docs/supabase_schema.sql](docs/supabase_schema.sql) (Script para provisionamento de banco de dados).
+
+---
+
+## 7. Licença e Garantia Operacional
 
 Este software foi desenhado e otimizado com foco na velocidade de registo em ecrãs táteis de terminais industriais. Para garantir o melhor desempenho:
 1.  Mantenha uma sessão ativa de utilizador com o Google para assegurar que as tabelas de VPH e Ranking contêm dados representativos de toda a operação de intralogística.

@@ -42,7 +42,7 @@ export const useUIStore = create<UIState>((set) => ({
     }
     return 'cronometro';
   })(),
-  screensaverEnabled: localStorage.getItem('repro_screensaver_enabled') !== 'false',
+  screensaverEnabled: localStorage.getItem('repro_screensaver_enabled') === 'true',
   screensaverTimeout: (() => {
     const saved = localStorage.getItem('repro_screensaver_timeout');
     return saved ? parseInt(saved, 10) : 5;
@@ -54,12 +54,14 @@ export const useUIStore = create<UIState>((set) => ({
     localStorage.setItem('repro_active_tab', tab);
     set({ activeTab: tab });
   },
-  setScreensaverActive: (active) => set({ screensaverActive: active }),
+  setScreensaverActive: (active) => set((state) => ({ 
+    screensaverActive: state.screensaverEnabled ? active : false 
+  })),
   updateScreensaverEnabled: (enabled, addToast) => {
     localStorage.setItem('repro_screensaver_enabled', String(enabled));
-    set({ screensaverEnabled: enabled });
+    set({ screensaverEnabled: enabled, screensaverActive: enabled ? false : false });
     if (addToast) {
-      addToast(`Protetor de ecrã: ${enabled ? 'ATIVADO' : 'DESATIVADO'}`, 'var(--color-info)');
+      addToast(`Descanso de ecrã: ${enabled ? 'ATIVADO' : 'DESATIVADO'}`, enabled ? 'var(--color-success)' : 'var(--color-info)');
     }
   },
   updateScreensaverTimeout: (timeout, addToast) => {

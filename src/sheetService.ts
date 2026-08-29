@@ -4,10 +4,12 @@
  */
 
 import { Log } from './types';
-import { saveLog, getLogs } from './dbLocal';
+import { saveLog, getLogs, getUnsyncedLogs, saveLogsBulk } from './dbLocal';
 import { saveLogsDirectly, fetchLogsDirectly } from './utils/supabase/client';
 import { getWeekNumber, parseDateString, getDayOfWeekName } from './utils/dateUtils';
 import { normalizeSectorId } from './utils/logUtils';
+import { sheetsCircuitBreaker, globalJobGuard } from './utils/circuitBreaker';
+import { telemetry } from './utils/telemetry';
 
 /**
  * Normalizes any Google Sheets URL (e.g. published web page pubhtml, Apps Script URL, or published CSV)
@@ -141,7 +143,7 @@ function jsonpFetch(url: string, timeoutMs = 15000): Promise<any> {
 /**
  * Posts a log to Google Apps Script Web App (Aba: Controle de horas - Repro)
  */
-export async function postToGoogleSheets(apiUrl: string, log: Log, signal?: AbortSignal): Promise<boolean> {
+export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<boolean> {
   if (!apiUrl || !apiUrl.startsWith('http')) return false;
 
   const payload = {
@@ -164,8 +166,7 @@ export async function postToGoogleSheets(apiUrl: string, log: Log, signal?: Abor
     const proxyRes = await fetch('/api/sheets/proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiUrl, payload }),
-      signal,
+      body: JSON.stringify({ apiUrl, payload })
     });
 
     if (proxyRes.ok) {
@@ -179,7 +180,6 @@ export async function postToGoogleSheets(apiUrl: string, log: Log, signal?: Abor
   // Tier 2: Direct browser fetch with standard CORS
   try {
     const response = await fetch(apiUrl, {
-      signal,
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload),
@@ -570,8 +570,7 @@ export async function postLogWithRetry(
   apiUrl: string,
   log: Log,
   userUid?: string,
-  maxAttempts = 3,
-  signal?: AbortSignal,
+  maxAttempts = 3
 ): Promise<boolean> {
   let gsheetsSuccess = false;
 
@@ -579,8 +578,7 @@ export async function postLogWithRetry(
   if (apiUrl && apiUrl.startsWith('http')) {
     let attempt = 0;
     while (attempt < maxAttempts) {
-      if (signal?.aborted) throw new DOMException('Sincronização cancelada', 'AbortError');
-      const ok = await postToGoogleSheets(apiUrl, log, signal);
+      const ok = await postToGoogleSheets(apiUrl, log);
       if (ok) {
         gsheetsSuccess = true;
         break;
@@ -608,40 +606,64 @@ export async function postLogWithRetry(
 
 /**
  * Synchronizes the offline queue (unsynced logs) to Google Sheets and Cloud
+ * Uses Concurrency Lock (JobGuard), CircuitBreaker, Indexed query & Batch Bulk Write (Anti-N+1)
  */
 export async function syncOfflineQueue(
   apiUrl: string,
   onProgress?: (syncedCount: number) => void,
-  userUid?: string,
-  signal?: AbortSignal,
+  userUid?: string
 ): Promise<{ successCount: number; failedCount: number }> {
-  const allLogs = await getLogs();
-  const unsyncedLogs = allLogs.filter(l => !l.synced);
+  // Prevent duplicate concurrent executions of syncOfflineQueue
+  const result = await globalJobGuard.runExclusive('syncOfflineQueue', async () => {
+    // 1. Indexed lookup: O(1) fetch unsynced items without scanning whole table
+    const unsyncedLogs = await getUnsyncedLogs();
 
-  if (unsyncedLogs.length === 0) {
-    return { successCount: 0, failedCount: 0 };
-  }
-
-  let successCount = 0;
-  let failedCount = 0;
-
-  for (let i = unsyncedLogs.length - 1; i >= 0; i--) {
-    const log = unsyncedLogs[i];
-    const isSuccess = await postLogWithRetry(apiUrl, log, userUid, 3, signal);
-
-    if (isSuccess) {
-      log.synced = true;
-      await saveLog(log);
-      successCount++;
-      if (onProgress) {
-        onProgress(successCount);
-      }
-    } else {
-      failedCount++;
+    if (unsyncedLogs.length === 0) {
+      return { successCount: 0, failedCount: 0 };
     }
-  }
 
-  return { successCount, failedCount };
+    // Check circuit breaker before initiating requests
+    if (sheetsCircuitBreaker.getState() === 'OPEN') {
+      telemetry.warn('SyncQueue', 'Circuito de sincronização temporariamente ABERTO para proteger cotas e custos.');
+      return { successCount: 0, failedCount: unsyncedLogs.length };
+    }
+
+    let successCount = 0;
+    let failedCount = 0;
+    const successfullySyncedLogs: Log[] = [];
+
+    for (let i = unsyncedLogs.length - 1; i >= 0; i--) {
+      // If circuit trips during execution, break early to prevent resource exhaustion
+      if (sheetsCircuitBreaker.getState() === 'OPEN') {
+        failedCount += (i + 1);
+        break;
+      }
+
+      const log = unsyncedLogs[i];
+      const isSuccess = await postLogWithRetry(apiUrl, log, userUid);
+
+      if (isSuccess) {
+        log.synced = true;
+        successfullySyncedLogs.push(log);
+        successCount++;
+        if (onProgress) {
+          onProgress(successCount);
+        }
+      } else {
+        failedCount++;
+      }
+    }
+
+    // 2. Anti-N+1: Save all updated logs in ONE single atomic transaction
+    if (successfullySyncedLogs.length > 0) {
+      await saveLogsBulk(successfullySyncedLogs);
+      telemetry.info('SyncQueue', `${successfullySyncedLogs.length} registros salvos no banco local via Bulk Transaction.`);
+    }
+
+    return { successCount, failedCount };
+  });
+
+  return result || { successCount: 0, failedCount: 0 };
 }
 
 /**
