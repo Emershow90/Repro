@@ -42,6 +42,105 @@ export interface WmsQueryDef {
 
 export const WMS_QUERIES: WmsQueryDef[] = [
   {
+    id: 'AUD001',
+    categoria: 'Reabastecimento',
+    nome: 'AUD001 — Auditoria de Reabastecimento (Setores 87, 88, 89, 90)',
+    descricao: 'Query de Reabastecimento / Auditoria com junção completa de Demanda, Realizado, Produtividade (EPH, VPH, Tempo) nos setores 87, 88, 89, 90.',
+    sql: `-- ============================================================
+-- QUERY REABASTECIMENTO / AUDITORIA
+-- FILTRO: Setores 87, 88, 89, 90 apenas
+-- ============================================================
+
+SELECT 
+    COALESCE(d.SETOR, r.SETOR) AS Setor,
+    COALESCE(d.RUA, r.RUA) AS Rua,
+    CASE 
+        WHEN d.QTD_DEMANDA IS NULL OR d.QTD_DEMANDA = 0 THEN 'SEM_DEMANDA'
+        WHEN r.QTD_REALIZADO IS NULL THEN 'NAO_INICIADO'
+        WHEN d.QTD_DEMANDA <= r.QTD_REALIZADO THEN 'CONCLUIDO'
+        WHEN r.QTD_REALIZADO > 0 THEN 'EM_ANDAMENTO'
+        ELSE 'PENDENTE'
+    END AS Status,
+    COALESCE(d.QTD_DEMANDA, 0) AS Demanda,
+    COALESCE(r.QTD_REALIZADO, 0) AS Realizado,
+    COALESCE(d.QTD_DEMANDA, 0) - COALESCE(r.QTD_REALIZADO, 0) AS Pendente,
+    CASE 
+        WHEN COALESCE(d.QTD_DEMANDA, 0) = 0 THEN 0
+        ELSE DECIMAL(COALESCE(r.QTD_REALIZADO, 0), 15, 2) 
+             / DECIMAL(d.QTD_DEMANDA, 15, 2) * 100
+    END AS Cobertura,
+    COALESCE(DECIMAL(p.EPH, 10, 2), 0) AS EPH,
+    COALESCE(DECIMAL(p.VPH, 10, 2), 0) AS VPH,
+    COALESCE(p.TEMPO_MINUTES, 0) AS Tempo,
+    CASE 
+        WHEN d.QTD_DEMANDA > r.QTD_REALIZADO * 1.5 THEN 'PRIORIDADE_ALTA'
+        WHEN d.QTD_DEMANDA > r.QTD_REALIZADO THEN 'ACELERAR'
+        ELSE 'NORMAL'
+    END AS Acoes
+
+FROM (
+    -- DEMANDA: Apenas setores 87, 88, 89, 90
+    SELECT 
+        HVSFN2 AS SETOR, 
+        HVSWN2 AS RUA, 
+        SUM(hvfvqa) AS QTD_DEMANDA
+    FROM newges.mrhvrep
+    WHERE hvnbsr = '10'
+      AND hvagd2 BETWEEN $param1 AND $param2
+      AND HVNYSR = 'O'
+      AND HVSFN2 IN (87, 88, 89, 90)
+    GROUP BY HVSFN2, HVSWN2
+) d
+
+FULL OUTER JOIN (
+    -- REALIZADO: Apenas setores 87, 88, 89, 90
+    SELECT 
+        H1SZNR AS SETOR, 
+        NRLATB AS RUA, 
+        SUM(H2ADQB) AS QTD_REALIZADO
+    FROM newges.mth2cpp
+    JOIN newges.mth1cpp 
+        ON h1i2c2 = h2i2c2 
+       AND h1i3c2 = h2i3c2
+    JOIN newges.mrnrrep 
+        ON h2jcc2 = nrbhnr 
+       AND nrrmni = nrrnni
+    WHERE H2HBD2 BETWEEN $param1 AND $param2
+      AND h1j6SS >= '20'
+      AND H1SZNR IN (87, 88, 89, 90)
+      AND NOT EXISTS (
+          SELECT 1 FROM newges.SOEHCPP 
+          WHERE EHI2C2 = H1I2C2
+      )
+    GROUP BY H1SZNR, NRLATB
+) r ON d.SETOR = r.SETOR AND d.RUA = r.RUA
+
+LEFT JOIN (
+    -- PRODUTIVIDADE: Apenas setores 87, 88, 89, 90
+    SELECT 
+        ACSECT AS SETOR,
+        ACRAY AS RUA,
+        CASE WHEN COUNT(DISTINCT ACDATE || DIGITS(ACTIME)) > 0 
+             THEN DECIMAL(SUM(ACCOLI), 15, 2) 
+                  / DECIMAL(COUNT(DISTINCT ACDATE || DIGITS(ACTIME)), 15, 2)
+             ELSE 0 
+        END AS EPH,
+        CASE WHEN COUNT(DISTINCT ACDATE || DIGITS(ACTIME)) > 0
+             THEN DECIMAL(SUM(ACARTI), 15, 2)
+                  / DECIMAL(COUNT(DISTINCT ACDATE || DIGITS(ACTIME)), 15, 2)
+             ELSE 0
+        END AS VPH,
+        COUNT(DISTINCT ACDATE || DIGITS(ACTIME)) * 30 AS TEMPO_MINUTES
+    FROM newges.actcop
+    WHERE ACDATE BETWEEN $param1 AND $param2
+      AND ACSECT IN (87, 88, 89, 90)
+    GROUP BY ACSECT, ACRAY
+) p ON COALESCE(d.SETOR, r.SETOR) = p.SETOR 
+   AND COALESCE(d.RUA, r.RUA) = p.RUA
+
+ORDER BY COALESCE(d.SETOR, r.SETOR), COALESCE(d.RUA, r.RUA);`
+  },
+  {
     id: 'SCG001',
     categoria: 'Reabastecimento',
     nome: 'SCG001 — Reabastecimento por Setor',
@@ -336,7 +435,7 @@ export default function OdbcQueryBridge({
   onAddToast
 }: OdbcQueryBridgeProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('Reabastecimento');
-  const [selectedQueryId, setSelectedQueryId] = useState<string>('SCG001');
+  const [selectedQueryId, setSelectedQueryId] = useState<string>('AUD001');
   const [searchFilter, setSearchFilter] = useState('');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);

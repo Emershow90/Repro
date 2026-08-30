@@ -168,11 +168,11 @@ export default function DiagnosticsTelemetryView() {
             <div>
               <span className="text-xs font-black text-white uppercase block">Status do Servidor Node.js</span>
               <div className="flex items-center gap-3 text-[0.68rem] text-slate-400 mt-0.5">
-                <span>Uptime: <strong className="text-white">{serverMetrics.uptimeSeconds}s</strong></span>
+                <span>Uptime: <strong className="text-white">{serverMetrics?.uptimeSeconds ?? 0}s</strong></span>
                 <span>•</span>
-                <span>Heap: <strong className="text-cyan-300">{serverMetrics.memory.heapUsedMb} MB</strong> / {serverMetrics.memory.heapTotalMb} MB</span>
+                <span>Heap: <strong className="text-cyan-300">{serverMetrics?.memory?.heapUsedMb ?? '0'} MB</strong> / {serverMetrics?.memory?.heapTotalMb ?? '0'} MB</span>
                 <span>•</span>
-                <span>IPs Ativos no RateLimiter: <strong className="text-emerald-400">{serverMetrics.rateLimiters.global.activeIps}</strong></span>
+                <span>IPs Ativos no RateLimiter: <strong className="text-emerald-400">{serverMetrics?.rateLimiters?.global?.activeIps ?? 0}</strong></span>
               </div>
             </div>
           </div>
