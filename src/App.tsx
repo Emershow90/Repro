@@ -61,7 +61,8 @@ import {
   Layers,
   FileSpreadsheet,
   Cpu,
-  Moon
+  Moon,
+  ExternalLink
 } from 'lucide-react';
 
 const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
@@ -160,6 +161,13 @@ export default function App() {
   const [panelSubTab, setPanelSubTab] = useState<'repro' | 'ruas'>('repro');
   const [inputOpen, setInputOpen] = useState(false);
   const [ticks, setTicks] = useState(0);
+
+  // Detecção de Modo Standalone / Iframe / TV para visualização externa
+  const isStandaloneMode = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('standalone') === 'true' || params.get('embed') === 'true' || params.get('mode') === 'tv';
+  }, []);
 
   // Parallax mouse position tracking for organic ambient effect
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -871,280 +879,338 @@ export default function App() {
 
       <div className="w-full max-w-6xl space-y-6 relative z-10">
         
-        {/* CABEÇALHO ORGÂNICO */}
-        <header className="relative flex flex-col md:flex-row justify-between border-b border-white/10 pb-5 items-start md:items-end gap-4">
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2.5">
-              <div className="w-3 h-3 rounded-full bg-emerald-400 shadow-lg shadow-emerald-500/50 animate-pulse" />
-              <h1 className="text-xl md:text-2xl font-black tracking-widest uppercase text-white font-sans">
-                REPRO <span className="text-emerald-400 font-mono text-base font-normal opacity-80">// Torre de Comando</span>
-              </h1>
+        {/* MODO STANDALONE / EMBED / TV (SITE EXTERNO) */}
+        {isStandaloneMode ? (
+          <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-slate-950/90 border border-cyan-500/30 rounded-2xl backdrop-blur-md shadow-xl gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-3 h-3 rounded-full bg-cyan-400 shadow-lg shadow-cyan-500/50 animate-pulse shrink-0" />
+              <div>
+                <h1 className="text-sm md:text-base font-black tracking-wider uppercase text-white font-mono flex items-center gap-2">
+                  <span>TERMINAL REPRO</span>
+                  <span className="text-cyan-400 text-xs font-normal">// Torre de Gestão</span>
+                </h1>
+                <p className="text-[0.60rem] text-slate-400 font-mono flex items-center gap-2">
+                  <span className="text-emerald-400 font-bold">● TEMPO REAL (READ-ONLY)</span>
+                  <span>•</span>
+                  <span>Última Sincronização: <strong className="text-white">{lastSyncTime || 'Ao vivo'}</strong></span>
+                </p>
+              </div>
             </div>
-            <p className="text-[0.62rem] text-slate-400 uppercase tracking-wider font-mono flex items-center gap-2">
-              <span>Motor v5.0 Cloud</span>
-              <span className="text-white/20">•</span>
-              <span className="text-emerald-400/90 font-bold">Obsidian Matte & Esmeralda</span>
-            </p>
-          </div>
-          
-          <div className="flex flex-col items-start md:items-end gap-2 text-[0.6rem] font-mono tracking-wider">
-            {/* Status Pills */}
-            <div className="flex flex-wrap items-center gap-2">
+
+            <div className="flex items-center flex-wrap gap-2 text-xs font-mono">
               {networkStatus === 'online' ? (
-                <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-lg flex items-center gap-1.5 text-[0.65rem]">
                   <Wifi size={11} />
                   <span>ONLINE</span>
                 </span>
               ) : (
-                <span className="text-slate-400 font-bold bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                <span className="text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-lg flex items-center gap-1.5 text-[0.65rem]">
                   <WifiOff size={11} />
                   <span>OFFLINE</span>
                 </span>
               )}
-              
-              <span className="text-slate-300 bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                <Database size={11} />
-                <span>IndexedDB</span>
-              </span>
-              
-              {apiUrl ? (
-                unsyncedCount > 0 ? (
-                  <span className="text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-2.5 py-0.5 rounded-full animate-pulse flex items-center gap-1.5">
-                    <Cloud size={11} />
-                    <span>{unsyncedCount} Pendentes</span>
-                  </span>
-                ) : (
-                  <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                    <Cloud size={11} />
-                    <span>Sheets OK</span>
-                  </span>
-                )
-              ) : (
-                <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                  <Cloud size={11} />
-                  <span>Configurar Sheets</span>
-                </span>
-              )}
 
-              {user ? (
-                <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                  <Cloud size={11} />
-                  <span>PostgreSQL Cloud</span>
-                </span>
-              ) : (
-                <span className="text-slate-400 bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                  <Cloud size={11} />
-                  <span>Modo Local</span>
-                </span>
-              )}
-            </div>
-
-            {/* Ações de Restauração & Sessão */}
-            <div className="flex flex-wrap items-center gap-2 mt-1 justify-start md:justify-end">
               <button
                 type="button"
-                onClick={() => updateScreensaverEnabled(!screensaverEnabled)}
-                className={`px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem] ${
-                  screensaverEnabled
-                    ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
-                    : 'bg-white/5 border-white/15 text-slate-400 hover:text-white'
-                }`}
-                title={screensaverEnabled ? 'Descanso de Tela ATIVADO (Clique para desligar)' : 'Descanso de Tela DESLIGADO (Clique para ligar)'}
-              >
-                <Moon size={11} className={screensaverEnabled ? 'text-purple-400' : 'text-slate-400'} />
-                <span>Descanso: {screensaverEnabled ? 'LIGADO' : 'OFF'}</span>
-              </button>
-
-              <button
-                onClick={handleRestoreSystem}
+                onClick={() => sincronizarFila(false)}
                 disabled={isSyncing}
-                className="px-2.5 py-1 bg-white/5 border border-white/15 text-slate-200 hover:text-emerald-400 hover:border-emerald-500/40 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm"
-                title="Restaura o sistema, diagnostica base de dados e reconecta sincronização"
+                className="px-3 py-1.5 bg-slate-900 border border-cyan-500/40 hover:bg-cyan-500/10 text-cyan-300 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+                title="Atualizar dados da nuvem agora"
               >
-                <RefreshCw size={11} className={isSyncing ? 'animate-spin text-emerald-400' : ''} />
-                <span>Restaurar Sistema</span>
+                <RefreshCw size={12} className={isSyncing ? 'animate-spin text-cyan-400' : ''} />
+                <span>{isSyncing ? 'Atualizando...' : 'Atualizar Dados'}</span>
               </button>
 
-              {user ? (
-                <>
-                  <span className="text-slate-400">OPERADOR: <strong className="text-white uppercase">{user.user_metadata?.full_name || user.email}</strong></span>
+              <a
+                href={typeof window !== 'undefined' ? window.location.pathname : '#'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 bg-white/5 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all"
+                title="Abrir Terminal Operacional Completo"
+              >
+                <ExternalLink size={12} />
+                <span>Abrir Terminal</span>
+              </a>
+            </div>
+          </header>
+        ) : (
+          <>
+            {/* CABEÇALHO ORGÂNICO */}
+            <header className="relative flex flex-col md:flex-row justify-between border-b border-white/10 pb-5 items-start md:items-end gap-4">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-3 h-3 rounded-full bg-emerald-400 shadow-lg shadow-emerald-500/50 animate-pulse" />
+                  <h1 className="text-xl md:text-2xl font-black tracking-widest uppercase text-white font-sans">
+                    REPRO <span className="text-emerald-400 font-mono text-base font-normal opacity-80">// Torre de Comando</span>
+                  </h1>
+                </div>
+                <p className="text-[0.62rem] text-slate-400 uppercase tracking-wider font-mono flex items-center gap-2">
+                  <span>Motor v5.0 Cloud</span>
+                  <span className="text-white/20">•</span>
+                  <span className="text-emerald-400/90 font-bold">Obsidian Matte & Esmeralda</span>
+                </p>
+              </div>
+              
+              <div className="flex flex-col items-start md:items-end gap-2 text-[0.6rem] font-mono tracking-wider">
+                {/* Status Pills */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {networkStatus === 'online' ? (
+                    <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                      <Wifi size={11} />
+                      <span>ONLINE</span>
+                    </span>
+                  ) : (
+                    <span className="text-slate-400 font-bold bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                      <WifiOff size={11} />
+                      <span>OFFLINE</span>
+                    </span>
+                  )}
+                  
+                  <span className="text-slate-300 bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                    <Database size={11} />
+                    <span>IndexedDB</span>
+                  </span>
+                  
+                  {apiUrl ? (
+                    unsyncedCount > 0 ? (
+                      <span className="text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-2.5 py-0.5 rounded-full animate-pulse flex items-center gap-1.5">
+                        <Cloud size={11} />
+                        <span>{unsyncedCount} Pendentes</span>
+                      </span>
+                    ) : (
+                      <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                        <Cloud size={11} />
+                        <span>Sheets OK</span>
+                      </span>
+                    )
+                  ) : (
+                    <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                      <Cloud size={11} />
+                      <span>Configurar Sheets</span>
+                    </span>
+                  )}
+
+                  {user ? (
+                    <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                      <Cloud size={11} />
+                      <span>PostgreSQL Cloud</span>
+                    </span>
+                  ) : (
+                    <span className="text-slate-400 bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                      <Cloud size={11} />
+                      <span>Modo Local</span>
+                    </span>
+                  )}
+                </div>
+
+                {/* Ações de Restauração & Sessão */}
+                <div className="flex flex-wrap items-center gap-2 mt-1 justify-start md:justify-end">
                   <button
-                    onClick={() => {
-                      localStorage.removeItem('repro_local_user');
-                      setUser(null);
-                      addToast("Sessão terminada.", 'var(--color-info)');
-                    }}
-                    className="px-2 py-1 bg-white/5 border border-white/10 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 rounded-lg cursor-pointer transition-all"
+                    type="button"
+                    onClick={() => updateScreensaverEnabled(!screensaverEnabled)}
+                    className={`px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem] ${
+                      screensaverEnabled
+                        ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                        : 'bg-white/5 border-white/15 text-slate-400 hover:text-white'
+                    }`}
+                    title={screensaverEnabled ? 'Descanso de Tela ATIVADO (Clique para desligar)' : 'Descanso de Tela DESLIGADO (Clique para ligar)'}
                   >
-                    SAIR
+                    <Moon size={11} className={screensaverEnabled ? 'text-purple-400' : 'text-slate-400'} />
+                    <span>Descanso: {screensaverEnabled ? 'LIGADO' : 'OFF'}</span>
                   </button>
-                </>
-              ) : (
-                <button
-                  onClick={() => {
-                    setIsGuestMode(false);
-                    localStorage.setItem('repro_guest_mode', 'false');
-                  }}
-                  className="px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-black rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold"
-                >
-                  FAZER LOGIN ⚡
-                </button>
-              )}
-            </div>
-            
-            <div className="text-slate-500 text-right text-[0.55rem]">
-              ÚLTIMA SINCRONIZAÇÃO: <span className="text-slate-400 font-bold">{lastSyncTime}</span>
-            </div>
-          </div>
-        </header>
 
-        {/* NAVEGAÇÃO DE ABAS RESPONSIVA (PC, MOBILE & PDT ZEBRA) */}
-        <nav 
-          id="main-app-navigation"
-          aria-label="Navegação Principal"
-          className="flex items-center gap-1.5 md:gap-2 overflow-x-auto no-scrollbar p-1.5 bg-black/50 rounded-2xl border border-white/10 backdrop-blur-md"
-        >
-          {/* 1. CRONÔMETRO (SEM LOGIN - LIVRE PARA PDT / MOBILE / PC) */}
-          <button
-            type="button"
-            id="tab-btn-cronometro"
-            onClick={() => handleTabChange('cronometro')}
-            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'cronometro'
-                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-            }`}
-          >
-            <Clock size={15} className={activeTab === 'cronometro' ? 'text-black' : 'text-emerald-400'} />
-            <span>Cronômetro</span>
-            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-              activeTab === 'cronometro'
-                ? 'bg-black/20 text-black'
-                : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-            }`}>
-              Livre
-            </span>
-          </button>
+                  <button
+                    onClick={handleRestoreSystem}
+                    disabled={isSyncing}
+                    className="px-2.5 py-1 bg-white/5 border border-white/15 text-slate-200 hover:text-emerald-400 hover:border-emerald-500/40 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm"
+                    title="Restaura o sistema, diagnostica base de dados e reconecta sincronização"
+                  >
+                    <RefreshCw size={11} className={isSyncing ? 'animate-spin text-emerald-400' : ''} />
+                    <span>Restaurar Sistema</span>
+                  </button>
 
-          {/* 2. REABASTECIMENTO POR RUA (SEM LOGIN - LIVRE PARA PDT / MOBILE / PC) */}
-          <button
-            type="button"
-            id="tab-btn-ruas"
-            onClick={() => handleTabChange('ruas')}
-            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'ruas'
-                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-            }`}
-          >
-            <MapPin size={15} className={activeTab === 'ruas' ? 'text-black' : 'text-emerald-400'} />
-            <span>Reabastecimento por Rua</span>
-            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-              activeTab === 'ruas'
-                ? 'bg-black/20 text-black'
-                : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-            }`}>
-              Livre
-            </span>
-          </button>
+                  {user ? (
+                    <>
+                      <span className="text-slate-400">OPERADOR: <strong className="text-white uppercase">{user.user_metadata?.full_name || user.email}</strong></span>
+                      <button
+                        onClick={() => {
+                          localStorage.removeItem('repro_local_user');
+                          setUser(null);
+                          addToast("Sessão terminada.", 'var(--color-info)');
+                        }}
+                        className="px-2 py-1 bg-white/5 border border-white/10 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 rounded-lg cursor-pointer transition-all"
+                      >
+                        SAIR
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setIsGuestMode(false);
+                        localStorage.setItem('repro_guest_mode', 'false');
+                      }}
+                      className="px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-black rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold"
+                    >
+                      FAZER LOGIN ⚡
+                    </button>
+                  )}
+                </div>
+                
+                <div className="text-slate-500 text-right text-[0.55rem]">
+                  ÚLTIMA SINCRONIZAÇÃO: <span className="text-slate-400 font-bold">{lastSyncTime}</span>
+                </div>
+              </div>
+            </header>
 
-          {/* 3. GESTÃO / AUDITORIA / SHEETS (NOVO MÓDULO CONSOLIDADO) */}
-          <button
-            type="button"
-            id="tab-btn-gestao"
-            onClick={() => handleTabChange('gestao')}
-            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'gestao'
-                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-            }`}
-          >
-            <Layers size={15} className={activeTab === 'gestao' ? 'text-black' : 'text-emerald-400'} />
-            <span>Gestão & Sheets</span>
-            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-              activeTab === 'gestao'
-                ? 'bg-black/20 text-black'
-                : 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
-            }`}>
-              PC / Web
-            </span>
-          </button>
+            {/* NAVEGAÇÃO DE ABAS RESPONSIVA (PC, MOBILE & PDT ZEBRA) */}
+            <nav 
+              id="main-app-navigation"
+              aria-label="Navegação Principal"
+              className="flex items-center gap-1.5 md:gap-2 overflow-x-auto no-scrollbar p-1.5 bg-black/50 rounded-2xl border border-white/10 backdrop-blur-md"
+            >
+              {/* 1. CRONÔMETRO (SEM LOGIN - LIVRE PARA PDT / MOBILE / PC) */}
+              <button
+                type="button"
+                id="tab-btn-cronometro"
+                onClick={() => handleTabChange('cronometro')}
+                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeTab === 'cronometro'
+                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
+                }`}
+              >
+                <Clock size={15} className={activeTab === 'cronometro' ? 'text-black' : 'text-emerald-400'} />
+                <span>Cronômetro</span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+                  activeTab === 'cronometro'
+                    ? 'bg-black/20 text-black'
+                    : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                }`}>
+                  Livre
+                </span>
+              </button>
 
-          {/* SEPARADOR VERTICAL SUTIL */}
-          <div className="h-6 w-px bg-white/10 mx-1 shrink-0" />
+              {/* 2. REABASTECIMENTO POR RUA (SEM LOGIN - LIVRE PARA PDT / MOBILE / PC) */}
+              <button
+                type="button"
+                id="tab-btn-ruas"
+                onClick={() => handleTabChange('ruas')}
+                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeTab === 'ruas'
+                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
+                }`}
+              >
+                <MapPin size={15} className={activeTab === 'ruas' ? 'text-black' : 'text-emerald-400'} />
+                <span>Reabastecimento por Rua</span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+                  activeTab === 'ruas'
+                    ? 'bg-black/20 text-black'
+                    : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                }`}>
+                  Livre
+                </span>
+              </button>
 
-          {/* 4. PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
-          <button
-            type="button"
-            id="tab-btn-painel"
-            onClick={() => handleTabChange('painel')}
-            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'painel'
-                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-            }`}
-          >
-            <LayoutDashboard size={15} className={activeTab === 'painel' ? 'text-black' : 'text-emerald-400'} />
-            <span>Painel Gráfico</span>
-            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-              activeTab === 'painel'
-                ? 'bg-black/20 text-black'
-                : isAuthUnlocked
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-            }`}>
-              {isAuthUnlocked ? 'Liberado' : 'Login'}
-            </span>
-          </button>
+              {/* 3. GESTÃO / AUDITORIA / SHEETS (NOVO MÓDULO CONSOLIDADO) */}
+              <button
+                type="button"
+                id="tab-btn-gestao"
+                onClick={() => handleTabChange('gestao')}
+                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeTab === 'gestao'
+                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
+                }`}
+              >
+                <Layers size={15} className={activeTab === 'gestao' ? 'text-black' : 'text-emerald-400'} />
+                <span>Gestão & Sheets</span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+                  activeTab === 'gestao'
+                    ? 'bg-black/20 text-black'
+                    : 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
+                }`}>
+                  PC / Web
+                </span>
+              </button>
 
-          {/* 4. HISTÓRICO DE LOGS (PROTEGIDO POR LOGIN) */}
-          <button
-            type="button"
-            id="tab-btn-historico"
-            onClick={() => handleTabChange('historico')}
-            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'historico'
-                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-            }`}
-          >
-            <History size={15} className={activeTab === 'historico' ? 'text-black' : 'text-emerald-400'} />
-            <span>Histórico de Logs</span>
-            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-              activeTab === 'historico'
-                ? 'bg-black/20 text-black'
-                : isAuthUnlocked
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-            }`}>
-              {isAuthUnlocked ? 'Liberado' : 'Login'}
-            </span>
-          </button>
+              {/* SEPARADOR VERTICAL SUTIL */}
+              <div className="h-6 w-px bg-white/10 mx-1 shrink-0" />
 
-          {/* 5. FOLLOW-UP SEMANAL (PROTEGIDO POR LOGIN) */}
-          <button
-            type="button"
-            id="tab-btn-followup"
-            onClick={() => handleTabChange('followup')}
-            className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'followup'
-                ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-            }`}
-          >
-            <CalendarClock size={15} className={activeTab === 'followup' ? 'text-black' : 'text-emerald-400'} />
-            <span>Follow-up Semanal</span>
-            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-              activeTab === 'followup'
-                ? 'bg-black/20 text-black'
-                : isAuthUnlocked
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-            }`}>
-              {isAuthUnlocked ? 'Liberado' : 'Login'}
-            </span>
-          </button>
-        </nav>
+              {/* 4. PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
+              <button
+                type="button"
+                id="tab-btn-painel"
+                onClick={() => handleTabChange('painel')}
+                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeTab === 'painel'
+                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
+                }`}
+              >
+                <LayoutDashboard size={15} className={activeTab === 'painel' ? 'text-black' : 'text-emerald-400'} />
+                <span>Painel Gráfico</span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+                  activeTab === 'painel'
+                    ? 'bg-black/20 text-black'
+                    : isAuthUnlocked
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                }`}>
+                  {isAuthUnlocked ? 'Liberado' : 'Login'}
+                </span>
+              </button>
+
+              {/* 4. HISTÓRICO DE LOGS (PROTEGIDO POR LOGIN) */}
+              <button
+                type="button"
+                id="tab-btn-historico"
+                onClick={() => handleTabChange('historico')}
+                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeTab === 'historico'
+                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
+                }`}
+              >
+                <History size={15} className={activeTab === 'historico' ? 'text-black' : 'text-emerald-400'} />
+                <span>Histórico de Logs</span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+                  activeTab === 'historico'
+                    ? 'bg-black/20 text-black'
+                    : isAuthUnlocked
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                }`}>
+                  {isAuthUnlocked ? 'Liberado' : 'Login'}
+                </span>
+              </button>
+
+              {/* 5. FOLLOW-UP SEMANAL (PROTEGIDO POR LOGIN) */}
+              <button
+                type="button"
+                id="tab-btn-followup"
+                onClick={() => handleTabChange('followup')}
+                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeTab === 'followup'
+                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
+                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
+                }`}
+              >
+                <CalendarClock size={15} className={activeTab === 'followup' ? 'text-black' : 'text-emerald-400'} />
+                <span>Follow-up Semanal</span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+                  activeTab === 'followup'
+                    ? 'bg-black/20 text-black'
+                    : isAuthUnlocked
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                }`}>
+                  {isAuthUnlocked ? 'Liberado' : 'Login'}
+                </span>
+              </button>
+            </nav>
+          </>
+        )}
 
         {/* CONTEÚDO DINÂMICO DE ACORDO COM A ABA ATIVA */}
         

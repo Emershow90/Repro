@@ -39,7 +39,12 @@ import {
   WifiOff,
   Laptop,
   Smartphone,
-  Radio
+  Radio,
+  Globe,
+  Tv,
+  Code,
+  Copy,
+  Check
 } from 'lucide-react';
 import { 
   formatDateToBR, 
@@ -56,8 +61,10 @@ import {
   inferSectorFromStreet 
 } from '../data/streetData';
 import { getState, saveState, getOperationalSyncQueue, clearOperationalSyncQueue } from '../dbLocal';
+import { postBatchToGoogleSheets } from '../sheetService';
 import AppsScriptHelper from './AppsScriptHelper';
 import DiagnosticsTelemetryView from './DiagnosticsTelemetryView';
+import OdbcQueryBridge from './OdbcQueryBridge';
 import { useUIStore } from '../stores/uiStore';
 
 interface ManagementModuleProps {
@@ -98,7 +105,7 @@ export default function ManagementModule({
 
   const [selectedSector, setSelectedSector] = useState<string>('TODOS');
   const [searchFilter, setSearchFilter] = useState('');
-  const [activeSubView, setActiveSubView] = useState<'resumo' | 'eventos' | 'repro' | 'sheets' | 'diagnostico'>('resumo');
+  const [activeSubView, setActiveSubView] = useState<'resumo' | 'eventos' | 'odbc' | 'repro' | 'sheets' | 'externo' | 'diagnostico'>('resumo');
 
   const {
     screensaverEnabled,
@@ -119,6 +126,15 @@ export default function ManagementModule({
   const lastSyncTimestamp = externalLastSync || internalLastSync;
   const isCurrentlySyncing = Boolean(externalIsSyncing || isSyncingSheets);
   const [syncLogsResult, setSyncLogsResult] = useState<{ success: number; errors: number } | null>(null);
+
+  const [copiedType, setCopiedType] = useState<string | null>(null);
+
+  const handleCopy = (text: string, type: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedType(type);
+    onAddToast('Copiado para a área de transferência!', 'var(--color-success)');
+    setTimeout(() => setCopiedType(null), 3000);
+  };
 
   // Carregar dados locais do IndexedDB
   const loadLocalData = useCallback(async () => {
@@ -289,14 +305,9 @@ export default function ManagementModule({
         eventos: queue.slice(0, 50) // Envia lote de até 50 eventos pendentes
       };
 
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payloadBatch),
-        redirect: 'follow'
-      });
+      const isSuccess = await postBatchToGoogleSheets(apiUrl, payloadBatch);
 
-      if (response.ok || response.type === 'opaque') {
+      if (isSuccess) {
         const processedIds = queue.slice(0, 50).map(e => e.id);
         await clearOperationalSyncQueue(processedIds);
         setSyncQueueItems(await getOperationalSyncQueue());
@@ -305,7 +316,7 @@ export default function ManagementModule({
         setSyncLogsResult({ success: streetSummaries.length, errors: 0 });
         onAddToast(`Dados consolidados enviados com sucesso para o Google Sheets!`, 'var(--color-success)');
       } else {
-        throw new Error('Falha na resposta do Google Apps Script');
+        throw new Error('Falha no envio para o Google Sheets. Verifique o link e permissões do Google Apps Script.');
       }
     } catch (err: any) {
       console.error('Erro de sincronização com o Sheets', err);
@@ -449,6 +460,19 @@ export default function ManagementModule({
 
         <button
           type="button"
+          onClick={() => setActiveSubView('odbc')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeSubView === 'odbc'
+              ? 'bg-purple-500 text-white shadow-md shadow-purple-500/20 font-black'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <Database size={14} />
+          <span>Queries SQL / ODBC & Auditoria</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveSubView('sheets')}
           className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
             activeSubView === 'sheets'
@@ -458,6 +482,19 @@ export default function ManagementModule({
         >
           <FileSpreadsheet size={14} />
           <span>Configuração Sheets</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubView('externo')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeSubView === 'externo'
+              ? 'bg-cyan-400 text-black shadow-md shadow-cyan-500/20'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <Globe size={14} />
+          <span>Conexão Site Externo / TV</span>
         </button>
 
         <button
@@ -698,6 +735,17 @@ export default function ManagementModule({
         </div>
       )}
 
+      {/* 5.5 CONTEÚDO DA SUB-VISÃO: QUERIES SQL / ODBC & AUDITORIA DE REABASTECIMENTO */}
+      {activeSubView === 'odbc' && (
+        <OdbcQueryBridge
+          streetSummaries={streetSummaries}
+          syncQueueItems={syncQueueItems}
+          eventsList={eventsList}
+          apiUrl={apiUrl}
+          onAddToast={onAddToast}
+        />
+      )}
+
       {/* 6. CONTEÚDO DA SUB-VISÃO: CONFIGURAÇÃO GOOGLE SHEETS & SINCRONIZAÇÃO MULTI-MÁQUINA */}
       {activeSubView === 'sheets' && (
         <div className="space-y-4">
@@ -895,6 +943,183 @@ export default function ManagementModule({
 
           {/* Script pronto para colar no Google Apps Script */}
           <AppsScriptHelper />
+        </div>
+      )}
+
+      {/* 6. CONTEÚDO DA SUB-VISÃO: CONEXÃO SITE EXTERNO & TORRE TV */}
+      {activeSubView === 'externo' && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Banner de Introdução */}
+          <div className="p-5 rounded-2xl bg-gradient-to-r from-cyan-950/60 to-slate-950 border border-cyan-500/30 shadow-lg space-y-2">
+            <div className="flex items-center gap-2 text-cyan-400">
+              <Globe size={18} />
+              <h2 className="text-sm font-black uppercase tracking-wider font-mono">
+                Conexão da Aba Gestão com Sites Externos & Painéis de TV
+              </h2>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Exiba os dados de <strong>Reabastecimento em tempo real</strong> em qualquer site externo, portal corporativo, intranet ou televisores de torre de controle. O site externo recebe os dados em <strong>modo somente leitura (Read-Only)</strong> diretamente do banco de dados, sem interferir na coleta dos operadores no galpão.
+            </p>
+          </div>
+
+          {/* Opção 1: Incorporação Iframe / Standalone TV */}
+          <div className="p-5 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
+              <div className="space-y-0.5">
+                <h3 className="text-xs font-black text-white uppercase flex items-center gap-2 font-mono">
+                  <Tv size={15} className="text-cyan-400" />
+                  <span>Opção 1: Incorporar Dashboard Completo (Iframe / Standalone)</span>
+                </h3>
+                <p className="text-[0.65rem] text-slate-400">
+                  Ideal para embutir no site externo com 1 linha de HTML sem precisar programar nada.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <a
+                  href={`${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}?view=gestao&standalone=true`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 bg-slate-900 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer font-mono"
+                >
+                  <ExternalLink size={13} />
+                  <span>Testar em Nova Aba</span>
+                </a>
+              </div>
+            </div>
+
+            {/* Link Direto */}
+            <div className="space-y-1.5">
+              <label className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                URL Standalone (Modo TV / Somente Gestão):
+              </label>
+              <div className="flex items-center gap-2 bg-slate-900 p-2.5 rounded-xl border border-white/10">
+                <input
+                  type="text"
+                  readOnly
+                  value={`${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}?view=gestao&standalone=true`}
+                  className="bg-transparent text-xs text-cyan-300 focus:outline-none w-full font-mono select-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleCopy(`${window.location.origin + window.location.pathname}?view=gestao&standalone=true`, 'url')}
+                  className="px-3 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all shrink-0 font-mono"
+                >
+                  {copiedType === 'url' ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                  <span>{copiedType === 'url' ? 'Copiado!' : 'Copiar URL'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Código Iframe HTML */}
+            <div className="space-y-1.5">
+              <label className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                Código HTML para colar no seu site externo:
+              </label>
+              <div className="relative bg-black p-3.5 rounded-xl border border-white/10 font-mono text-xs text-slate-300 overflow-x-auto">
+                <pre className="text-[0.72rem] leading-relaxed text-cyan-200">
+{`<iframe
+  src="${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}?view=gestao&standalone=true"
+  title="Torre de Gestão REPRO"
+  width="100%"
+  height="850"
+  style="border: none; border-radius: 16px; background: #020617;"
+  loading="lazy">
+</iframe>`}
+                </pre>
+                <button
+                  type="button"
+                  onClick={() => handleCopy(`<iframe src="${window.location.origin + window.location.pathname}?view=gestao&standalone=true" title="Torre de Gestão REPRO" width="100%" height="850" style="border: none; border-radius: 16px; background: #020617;" loading="lazy"></iframe>`, 'iframe')}
+                  className="absolute top-2 right-2 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white text-[0.65rem] font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all border border-white/10 font-mono"
+                >
+                  {copiedType === 'iframe' ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                  <span>{copiedType === 'iframe' ? 'Copiado!' : 'Copiar HTML'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Opção 2: Consumo de Dados via API JSON */}
+          <div className="p-5 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-4">
+            <div className="space-y-0.5 border-b border-white/10 pb-3">
+              <h3 className="text-xs font-black text-white uppercase flex items-center gap-2 font-mono">
+                <Code size={15} className="text-emerald-400" />
+                <span>Opção 2: Consumir Apenas os Dados em Tempo Real (REST / JSON)</span>
+              </h3>
+              <p className="text-[0.65rem] text-slate-400">
+                Se você já possui um front-end próprio no site externo e quer receber os números para alimentar seus componentes.
+              </p>
+            </div>
+
+            {/* Endpoint configurado */}
+            <div className="space-y-1.5">
+              <label className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                Endpoint da Planilha / Google Apps Script:
+              </label>
+              <div className="flex items-center gap-2 bg-slate-900 p-2.5 rounded-xl border border-white/10">
+                <input
+                  type="text"
+                  readOnly
+                  value={apiUrl || 'https://script.google.com/macros/s/AKfycbwzg8jDY71b5sMc6Q_qMii3YYQrdyKROuPe9l24iyEtke1Zhx9cCEt1R7xhxmtjN5aK2A/exec'}
+                  className="bg-transparent text-xs text-emerald-400 focus:outline-none w-full font-mono select-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleCopy(apiUrl || 'https://script.google.com/macros/s/AKfycbwzg8jDY71b5sMc6Q_qMii3YYQrdyKROuPe9l24iyEtke1Zhx9cCEt1R7xhxmtjN5aK2A/exec', 'api')}
+                  className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all shrink-0 font-mono"
+                >
+                  {copiedType === 'api' ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                  <span>{copiedType === 'api' ? 'Copiado!' : 'Copiar Endpoint'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Snippet JavaScript */}
+            <div className="space-y-1.5">
+              <label className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                Código JavaScript pronto para o seu site externo:
+              </label>
+              <div className="relative bg-black p-3.5 rounded-xl border border-white/10 font-mono text-xs text-slate-300 overflow-x-auto">
+                <pre className="text-[0.70rem] leading-relaxed text-emerald-300">
+{`// Função para carregar os dados no site externo a cada 10 segundos
+async function fetchReabastecimentoLive() {
+  const endpoint = '${apiUrl || "https://script.google.com/macros/s/AKfycbwzg8jDY71b5sMc6Q_qMii3YYQrdyKROuPe9l24iyEtke1Zhx9cCEt1R7xhxmtjN5aK2A/exec"}';
+  
+  try {
+    const res = await fetch(endpoint + '?action=getDemands');
+    const data = await res.json();
+    console.log("Dados de Reabastecimento em tempo real:", data);
+    // Atualize sua interface com os dados recebidos...
+  } catch (err) {
+    console.error("Falha ao sincronizar feed de reabastecimento:", err);
+  }
+}
+
+setInterval(fetchReabastecimentoLive, 10000);
+fetchReabastecimentoLive();`}
+                </pre>
+                <button
+                  type="button"
+                  onClick={() => handleCopy(`async function fetchReabastecimentoLive() {
+  const endpoint = '${apiUrl || "https://script.google.com/macros/s/AKfycbwzg8jDY71b5sMc6Q_qMii3YYQrdyKROuPe9l24iyEtke1Zhx9cCEt1R7xhxmtjN5aK2A/exec"}';
+  try {
+    const res = await fetch(endpoint + '?action=getDemands');
+    const data = await res.json();
+    console.log("Dados de Reabastecimento em tempo real:", data);
+  } catch (err) {
+    console.error("Falha ao sincronizar feed:", err);
+  }
+}
+setInterval(fetchReabastecimentoLive, 10000);
+fetchReabastecimentoLive();`, 'js')}
+                  className="absolute top-2 right-2 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white text-[0.65rem] font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all border border-white/10 font-mono"
+                >
+                  {copiedType === 'js' ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                  <span>{copiedType === 'js' ? 'Copiado!' : 'Copiar Código'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

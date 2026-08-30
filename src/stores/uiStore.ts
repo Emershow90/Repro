@@ -26,10 +26,10 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set) => ({
   activeTab: (() => {
-    // 1. Prioridade: Parâmetro direto na URL (?tab=ruas, ?tab=gestao, etc.)
+    // 1. Prioridade: Parâmetro direto na URL (?tab=ruas, ?tab=gestao, ?view=gestao, etc.)
     if (typeof window !== 'undefined' && window.location.search) {
       const urlParams = new URLSearchParams(window.location.search);
-      const tabParam = urlParams.get('tab') as TabType;
+      const tabParam = (urlParams.get('tab') || urlParams.get('view')) as TabType;
       if (tabParam && ['cronometro', 'ruas', 'gestao', 'painel', 'historico', 'followup'].includes(tabParam)) {
         return tabParam;
       }

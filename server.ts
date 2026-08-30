@@ -210,6 +210,50 @@ async function startServer() {
     }
   });
 
+  // API: Visual Studio AI & ODBC WMS Query Connector Bridge
+  app.post("/api/odbc/query", async (req, res) => {
+    try {
+      const { queryId, sql, summaries } = req.body;
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      // Simulated DB2/NEWGES WMS Dataset builder for Visual Studio AI
+      let rows: any[] = [];
+      if (Array.isArray(summaries) && summaries.length > 0) {
+        rows = summaries.map((s: any, idx: number) => ({
+          ARTICLE: `ART-${(1001 + idx)}`,
+          DESIGNATION: `ARTIGO REABASTECIMENTO ${s.rua}`,
+          SECTEUR: s.setor || '87',
+          UNIVERS: `UNI-${s.setor || '87'}`,
+          CLASSE: 'PADRAO',
+          ADRESSE_PICKING: `PICK-${s.rua}-01`,
+          QTE_PICKING: s.realizado || 0,
+          QTE_STOCK: s.demanda ? (s.demanda + 50) : 100,
+          QTE_A_REABASTECER: s.pendente || 0,
+          STATUS: s.status || 'EM_ANDAMENTO',
+          EPH: s.eph || '0.0',
+          VPH: s.vph || '0.0',
+          DATE_EXEC: todayStr
+        }));
+      } else {
+        rows = [
+          { ARTICLE: 'ART-1001', DESIGNATION: 'PRODUTO RUA 8701', SECTEUR: '87', ADRESSE_PICKING: 'PICK-8701-01', QTE_PICKING: 45, QTE_STOCK: 120, QTE_A_REABASTECER: 75, STATUS: 'EM_ANDAMENTO' },
+          { ARTICLE: 'ART-1002', DESIGNATION: 'PRODUTO RUA 8702', SECTEUR: '87', ADRESSE_PICKING: 'PICK-8702-01', QTE_PICKING: 80, QTE_STOCK: 100, QTE_A_REABASTECER: 20, STATUS: 'ATENDIDA' },
+          { ARTICLE: 'ART-1003', DESIGNATION: 'PRODUTO RUA 8801', SECTEUR: '88', ADRESSE_PICKING: 'PICK-8801-01', QTE_PICKING: 10, QTE_STOCK: 90, QTE_A_REABASTECER: 80, STATUS: 'EM_ANDAMENTO' }
+        ];
+      }
+
+      res.json({
+        status: "OK",
+        queryId: queryId || 'CUSTOM_ODBC',
+        sql: sql || 'SELECT * FROM NEWGES.MRNRREP',
+        totalRows: rows.length,
+        rows
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: `Erro na execução da query ODBC: ${err.message}` });
+    }
+  });
+
   // Vite development middleware vs Static Production files serving
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

@@ -18,6 +18,11 @@ export function normalizeSheetUrl(url: string): string {
   if (!url) return '';
   let trimmed = url.trim();
   
+  // Auto-convert Google Apps Script /dev URLs to production /exec Web App URLs
+  if (trimmed.includes('script.google.com') && (trimmed.endsWith('/dev') || trimmed.includes('/dev?'))) {
+    trimmed = trimmed.replace(/\/dev(\?.*)?$/, '/exec$1');
+  }
+
   // If it's a published Google Spreadsheet page (pubhtml or pub)
   if (trimmed.includes('docs.google.com/spreadsheets/d/e/') || trimmed.includes('/pubhtml')) {
     let csvUrl = trimmed.replace(/\/pubhtml(\?.*)?$/, '/pub$1');
@@ -143,8 +148,9 @@ function jsonpFetch(url: string, timeoutMs = 15000): Promise<any> {
 /**
  * Posts a log to Google Apps Script Web App (Aba: Controle de horas - Repro)
  */
-export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<boolean> {
-  if (!apiUrl || !apiUrl.startsWith('http')) return false;
+export async function postToGoogleSheets(apiUrlInput: string, log: Log): Promise<boolean> {
+  if (!apiUrlInput || !apiUrlInput.startsWith('http')) return false;
+  const apiUrl = normalizeSheetUrl(apiUrlInput);
 
   const payload = {
     setor: log.setor || '87',
@@ -197,7 +203,7 @@ export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<bool
   try {
     const insertUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'action=insert&payload=' + encodeURIComponent(JSON.stringify(payload));
     const result = await jsonpFetch(insertUrl);
-    if (result && result.status === 'sucesso') {
+    if (result && (result.status === 'sucesso' || result.status === 'success')) {
       return true;
     }
   } catch (err) {
@@ -215,6 +221,71 @@ export async function postToGoogleSheets(apiUrl: string, log: Log): Promise<bool
     return true; // Assume success for opaque response if JSONP failed
   } catch (err) {
     console.warn('Google Sheets no-cors POST error:', err);
+    return false;
+  }
+}
+
+/**
+ * Posts arbitrary payload (e.g. batch consolidation) to Google Apps Script Web App
+ */
+export async function postBatchToGoogleSheets(apiUrlInput: string, payload: unknown): Promise<boolean> {
+  if (!apiUrlInput || !apiUrlInput.startsWith('http')) return false;
+  const apiUrl = normalizeSheetUrl(apiUrlInput);
+
+  // Tier 1: Try Server-side proxy first if backend API is available
+  try {
+    const proxyRes = await fetch('/api/sheets/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiUrl, payload })
+    });
+
+    if (proxyRes.ok) {
+      const result = await proxyRes.json();
+      if (result.status === 'success') return true;
+    }
+  } catch {
+    // Fallback to client fetch
+  }
+
+  // Tier 2: Direct browser fetch with standard CORS
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
+      redirect: 'follow',
+    });
+
+    if (response.ok || response.type === 'opaque') {
+      return true;
+    }
+  } catch (err) {
+    console.warn('Direct Google Sheets POST batch error, trying JSONP fallback:', err);
+  }
+
+  // Tier 3: JSONP Fallback via GET (Action: insert) to bypass Google Workspace CORS / Auth redirects
+  try {
+    const insertUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'action=insert&payload=' + encodeURIComponent(JSON.stringify(payload));
+    const result = await jsonpFetch(insertUrl);
+    if (result && (result.status === 'sucesso' || result.status === 'success')) {
+      return true;
+    }
+  } catch (err) {
+    console.warn('Google Sheets JSONP Insert batch error:', err);
+  }
+
+  // Tier 4: Direct browser fetch with mode: 'no-cors'
+  try {
+    await fetch(apiUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    });
+    return true;
+  } catch (err) {
+    console.warn('Google Sheets no-cors POST batch error:', err);
     return false;
   }
 }
@@ -325,19 +396,42 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
     );
   }
 
-  const dataArray = Array.isArray(data)
-    ? data
-    : (data && typeof data === 'object' && 'dados' in data && Array.isArray((data as Record<string, unknown>).dados))
-    ? (data as Record<string, unknown>).dados as unknown[]
-    : (data && typeof data === 'object' && 'data' in data && Array.isArray((data as Record<string, unknown>).data))
-    ? (data as Record<string, unknown>).data as unknown[]
-    : [];
+  let dataArray: unknown[] = [];
 
-  if (!Array.isArray(dataArray)) {
-    if (data && typeof data === 'object' && 'status' in data && (data as Record<string, unknown>).status === 'erro') {
-      throw new Error(String((data as Record<string, unknown>).mensagem || 'Erro retornado pela planilha Google'));
+  if (Array.isArray(data)) {
+    dataArray = data;
+  } else if (data && typeof data === 'object') {
+    const obj = data as Record<string, unknown>;
+    if ('dados' in obj && Array.isArray(obj.dados)) {
+      dataArray = obj.dados as unknown[];
+    } else if ('data' in obj && Array.isArray(obj.data)) {
+      dataArray = obj.data as unknown[];
+    } else {
+      // Check if any sheet name key (e.g., "Controle de horas - Repro") contains an array
+      const sheetKeys = ['Controle de horas - Repro', 'Gestão', 'Formulário', 'RESUMO_REPRO'];
+      for (const key of sheetKeys) {
+        if (key in obj && Array.isArray(obj[key])) {
+          dataArray = obj[key] as unknown[];
+          break;
+        }
+      }
+      // Fallback: pick the first key that holds an array of row objects
+      if (dataArray.length === 0) {
+        for (const k of Object.keys(obj)) {
+          if (Array.isArray(obj[k]) && (obj[k] as unknown[]).length > 0) {
+            dataArray = obj[k] as unknown[];
+            break;
+          }
+        }
+      }
     }
-    return [];
+  }
+
+  if (!Array.isArray(dataArray) || dataArray.length === 0) {
+    if (data && typeof data === 'object' && 'status' in data && (data as Record<string, unknown>).status === 'erro') {
+      throw new Error(String((data as Record<string, unknown>).mensagem || (data as Record<string, unknown>).erro || 'Erro retornado pela planilha Google'));
+    }
+    if (!Array.isArray(dataArray)) return [];
   }
 
   // Map raw sheet objects to typed Log objects
