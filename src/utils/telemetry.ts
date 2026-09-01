@@ -27,6 +27,10 @@ class TelemetryService {
     // Intercept uncaught window errors to telemetry
     if (typeof window !== 'undefined') {
       window.addEventListener('error', (event) => {
+        const msg = event.message || '';
+        if (msg.includes('WebSocket') || msg.includes('websocket') || msg.includes('vite') || msg.includes('HMR') || msg.includes('ws://') || msg.includes('wss://')) {
+          return;
+        }
         this.error('WindowError', event.message, {
           filename: event.filename,
           lineno: event.lineno,
@@ -36,7 +40,14 @@ class TelemetryService {
       });
 
       window.addEventListener('unhandledrejection', (event) => {
-        this.error('UnhandledRejection', event.reason?.message || String(event.reason), {
+        const reasonStr = event.reason?.message || String(event.reason || '');
+        if (reasonStr.includes('WebSocket') || reasonStr.includes('websocket') || reasonStr.includes('vite') || reasonStr.includes('HMR') || reasonStr.includes('ws://') || reasonStr.includes('wss://')) {
+          try {
+            event.preventDefault();
+          } catch (e) {}
+          return;
+        }
+        this.error('UnhandledRejection', reasonStr, {
           stack: event.reason?.stack
         });
       });

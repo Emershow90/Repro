@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef, ChangeEvent } from 'react';
-import { Wifi, WifiOff, Cloud, Database, RefreshCw, AlertCircle, LogIn, LogOut, Loader2, Key } from 'lucide-react';
+import { Wifi, WifiOff, Cloud, Database, RefreshCw, AlertCircle, LogIn, LogOut, Loader2, Key, HelpCircle } from 'lucide-react';
 import { Log, AppTimerState } from './types';
 import {
   initDb,
@@ -38,6 +38,8 @@ import StreetReplenishmentModule from './components/StreetReplenishmentModule';
 import ManagementModule from './components/ManagementModule';
 import ErrorBoundary from './components/ErrorBoundary';
 import Screensaver from './components/Screensaver';
+import HelpSupportModal from './components/HelpSupportModal';
+import TabBarBead from './components/TabBarBead';
 import { 
   deduplicateLogs, 
   isLogMatchingSector, 
@@ -53,6 +55,7 @@ import {
   User, 
   Shield, 
   Monitor, 
+  Terminal,
   Filter, 
   Settings, 
   Edit3,
@@ -110,6 +113,8 @@ export default function App() {
   const { currentUser, currentRole, activeOperator, updateCurrentUser, updateCurrentRole, setActiveOperator } = useCollaboratorStore();
   const {
     activeTab,
+    theme,
+    toggleTheme,
     screensaverEnabled,
     screensaverTimeout,
     screensaverActive,
@@ -145,6 +150,8 @@ export default function App() {
     }
     return saved;
   });
+
+  const [showHelpModal, setShowHelpModal] = useState(false);
 
   const isSyncingRef = useRef(false);
   const lastAutoSyncTimeRef = useRef(0);
@@ -830,28 +837,100 @@ export default function App() {
 
   const isAuthUnlocked = Boolean(user || isGuestMode);
 
+  const navigationTabs = useMemo(() => [
+    {
+      id: 'cronometro',
+      label: 'Cronômetro',
+      icon: <Clock size={15} className={activeTab === 'cronometro' ? 'text-black' : 'text-emerald-400'} />,
+      badge: 'Livre'
+    },
+    {
+      id: 'ruas',
+      label: 'Reabastecimento por Rua',
+      icon: <MapPin size={15} className={activeTab === 'ruas' ? 'text-black' : 'text-emerald-400'} />,
+      badge: 'Livre'
+    },
+    {
+      id: 'gestao',
+      label: 'Gestão & Sheets',
+      icon: <Layers size={15} className={activeTab === 'gestao' ? 'text-black' : 'text-emerald-400'} />,
+      badge: 'PC / Web'
+    },
+    {
+      id: 'painel',
+      label: 'Painel Gráfico',
+      icon: <LayoutDashboard size={15} className={activeTab === 'painel' ? 'text-black' : 'text-emerald-400'} />,
+      badge: isAuthUnlocked ? 'Liberado' : 'Login'
+    },
+    {
+      id: 'historico',
+      label: 'Histórico de Logs',
+      icon: <History size={15} className={activeTab === 'historico' ? 'text-black' : 'text-emerald-400'} />,
+      badge: isAuthUnlocked ? 'Liberado' : 'Login'
+    },
+    {
+      id: 'followup',
+      label: 'Follow-up Semanal',
+      icon: <CalendarClock size={15} className={activeTab === 'followup' ? 'text-black' : 'text-emerald-400'} />,
+      badge: isAuthUnlocked ? 'Liberado' : 'Login'
+    }
+  ], [activeTab, isAuthUnlocked]);
+
+  // Global keyboard shortcut for AS/400 Theme & Functions
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // F24 or Alt+T for switching theme
+      if (e.key === 'F24' || (e.altKey && (e.key === 't' || e.key === 'T'))) {
+        e.preventDefault();
+        toggleTheme(addToast);
+      }
+      // F5 custom refresh
+      if (e.key === 'F5' && e.ctrlKey) {
+        // allow normal browser hard reload
+      } else if (e.key === 'F5') {
+        e.preventDefault();
+        sincronizarFila(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [toggleTheme, addToast, sincronizarFila]);
+
   return (
-    <div className="terminal-root p-4 md:p-8 flex flex-col items-center relative overflow-hidden">
+    <div className={`terminal-root ${theme === 'as400' ? 'theme-as400' : ''} p-2 sm:p-4 md:p-8 flex flex-col items-center relative overflow-hidden min-h-screen`}>
       
-      {/* Dynamic Parallax Floating Background Spheres */}
-      <div 
-        className="parallax-orb parallax-orb-1"
-        style={{
-          transform: `translate3d(${mousePos.x * 0.8}px, ${mousePos.y * 0.8}px, 0)`
-        }}
-      />
-      <div 
-        className="parallax-orb parallax-orb-2"
-        style={{
-          transform: `translate3d(${-mousePos.x * 1.2}px, ${-mousePos.y * 1.2}px, 0)`
-        }}
-      />
-      <div 
-        className="parallax-orb parallax-orb-3"
-        style={{
-          transform: `translate3d(${mousePos.x * 0.5}px, ${mousePos.y * 0.5}px, 0)`
-        }}
-      />
+      {/* Dynamic Parallax Floating Background Spheres (Disabled in AS/400 mode) */}
+      {theme !== 'as400' && (
+        <>
+          <div 
+            className="parallax-orb parallax-orb-1"
+            style={{
+              transform: `translate3d(${mousePos.x * 0.8}px, ${mousePos.y * 0.8}px, 0)`
+            }}
+          />
+          <div 
+            className="parallax-orb parallax-orb-2"
+            style={{
+              transform: `translate3d(${-mousePos.x * 1.2}px, ${-mousePos.y * 1.2}px, 0)`
+            }}
+          />
+          <div 
+            className="parallax-orb parallax-orb-3"
+            style={{
+              transform: `translate3d(${mousePos.x * 0.5}px, ${mousePos.y * 0.5}px, 0)`
+            }}
+          />
+        </>
+      )}
+
+      {/* AS/400 CRT TOP SYSTEM LINE */}
+      {theme === 'as400' && (
+        <div className="w-full max-w-6xl mb-2 px-3 py-1 bg-black border border-[#00ff66] text-[#00ff66] font-mono text-[0.68rem] flex justify-between items-center tracking-widest uppercase">
+          <span>IBM 5250 REPRO WMS // ESTAÇÃO: WS01</span>
+          <span className="hidden sm:inline">DATA: {new Date().toLocaleDateString('pt-PT')}</span>
+          <span>OPERADOR: {activeOperator || 'GUEST'}</span>
+        </div>
+      )}
 
       {/* Global Supabase Loading Progress and Spinner feedback */}
       {supabaseLoading && (
@@ -909,6 +988,30 @@ export default function App() {
                   <span>OFFLINE</span>
                 </span>
               )}
+
+              <button
+                type="button"
+                onClick={() => toggleTheme(addToast)}
+                className={`px-3 py-1.5 border text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer transition-all ${
+                  theme === 'as400'
+                    ? 'bg-emerald-500 text-black border-emerald-400 font-black shadow-md'
+                    : 'bg-slate-900 border-purple-500/40 text-purple-300 hover:bg-purple-500/10'
+                }`}
+                title="Alternar Tema: IBM AS/400 5250 (Fósforo Verde) vs Torre Obsidian (Alt+T)"
+              >
+                <Terminal size={12} className={theme === 'as400' ? 'text-black' : 'text-purple-400'} />
+                <span>{theme === 'as400' ? 'IBM AS/400' : 'Tema AS/400'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowHelpModal(true)}
+                className="px-3 py-1.5 bg-slate-900 border border-emerald-500/40 hover:bg-emerald-500/10 text-emerald-300 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer transition-all"
+                title="Abrir Central de Ajuda e Documentação"
+              >
+                <HelpCircle size={12} className="text-emerald-400" />
+                <span>Ajuda</span>
+              </button>
 
               <button
                 type="button"
@@ -1007,6 +1110,30 @@ export default function App() {
                 <div className="flex flex-wrap items-center gap-2 mt-1 justify-start md:justify-end">
                   <button
                     type="button"
+                    onClick={() => toggleTheme(addToast)}
+                    className={`px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem] ${
+                      theme === 'as400'
+                        ? 'bg-emerald-500 text-black border-emerald-400 font-black'
+                        : 'bg-white/5 border-purple-500/30 text-purple-300 hover:bg-purple-500/20'
+                    }`}
+                    title="Alternar Tema: IBM AS/400 5250 (Fósforo Verde) vs Torre Obsidian (Alt+T)"
+                  >
+                    <Terminal size={11} className={theme === 'as400' ? 'text-black' : 'text-purple-400'} />
+                    <span>{theme === 'as400' ? 'IBM AS/400' : 'TEMA AS/400'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowHelpModal(true)}
+                    className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/60 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem]"
+                    title="Central de Ajuda, Atalhos do Coletor e Documentação"
+                  >
+                    <HelpCircle size={11} className="text-emerald-400" />
+                    <span>Ajuda</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => updateScreensaverEnabled(!screensaverEnabled)}
                     className={`px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem] ${
                       screensaverEnabled
@@ -1062,153 +1189,12 @@ export default function App() {
               </div>
             </header>
 
-            {/* NAVEGAÇÃO DE ABAS RESPONSIVA (PC, MOBILE & PDT ZEBRA) */}
-            <nav 
-              id="main-app-navigation"
-              aria-label="Navegação Principal"
-              className="flex items-center gap-1.5 md:gap-2 overflow-x-auto no-scrollbar p-1.5 bg-black/50 rounded-2xl border border-white/10 backdrop-blur-md"
-            >
-              {/* 1. CRONÔMETRO (SEM LOGIN - LIVRE PARA PDT / MOBILE / PC) */}
-              <button
-                type="button"
-                id="tab-btn-cronometro"
-                onClick={() => handleTabChange('cronometro')}
-                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                  activeTab === 'cronometro'
-                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-                }`}
-              >
-                <Clock size={15} className={activeTab === 'cronometro' ? 'text-black' : 'text-emerald-400'} />
-                <span>Cronômetro</span>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-                  activeTab === 'cronometro'
-                    ? 'bg-black/20 text-black'
-                    : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                }`}>
-                  Livre
-                </span>
-              </button>
-
-              {/* 2. REABASTECIMENTO POR RUA (SEM LOGIN - LIVRE PARA PDT / MOBILE / PC) */}
-              <button
-                type="button"
-                id="tab-btn-ruas"
-                onClick={() => handleTabChange('ruas')}
-                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                  activeTab === 'ruas'
-                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-                }`}
-              >
-                <MapPin size={15} className={activeTab === 'ruas' ? 'text-black' : 'text-emerald-400'} />
-                <span>Reabastecimento por Rua</span>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-                  activeTab === 'ruas'
-                    ? 'bg-black/20 text-black'
-                    : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                }`}>
-                  Livre
-                </span>
-              </button>
-
-              {/* 3. GESTÃO / AUDITORIA / SHEETS (NOVO MÓDULO CONSOLIDADO) */}
-              <button
-                type="button"
-                id="tab-btn-gestao"
-                onClick={() => handleTabChange('gestao')}
-                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                  activeTab === 'gestao'
-                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-                }`}
-              >
-                <Layers size={15} className={activeTab === 'gestao' ? 'text-black' : 'text-emerald-400'} />
-                <span>Gestão & Sheets</span>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-                  activeTab === 'gestao'
-                    ? 'bg-black/20 text-black'
-                    : 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
-                }`}>
-                  PC / Web
-                </span>
-              </button>
-
-              {/* SEPARADOR VERTICAL SUTIL */}
-              <div className="h-6 w-px bg-white/10 mx-1 shrink-0" />
-
-              {/* 4. PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
-              <button
-                type="button"
-                id="tab-btn-painel"
-                onClick={() => handleTabChange('painel')}
-                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                  activeTab === 'painel'
-                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-                }`}
-              >
-                <LayoutDashboard size={15} className={activeTab === 'painel' ? 'text-black' : 'text-emerald-400'} />
-                <span>Painel Gráfico</span>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-                  activeTab === 'painel'
-                    ? 'bg-black/20 text-black'
-                    : isAuthUnlocked
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                }`}>
-                  {isAuthUnlocked ? 'Liberado' : 'Login'}
-                </span>
-              </button>
-
-              {/* 4. HISTÓRICO DE LOGS (PROTEGIDO POR LOGIN) */}
-              <button
-                type="button"
-                id="tab-btn-historico"
-                onClick={() => handleTabChange('historico')}
-                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                  activeTab === 'historico'
-                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-                }`}
-              >
-                <History size={15} className={activeTab === 'historico' ? 'text-black' : 'text-emerald-400'} />
-                <span>Histórico de Logs</span>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-                  activeTab === 'historico'
-                    ? 'bg-black/20 text-black'
-                    : isAuthUnlocked
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                }`}>
-                  {isAuthUnlocked ? 'Liberado' : 'Login'}
-                </span>
-              </button>
-
-              {/* 5. FOLLOW-UP SEMANAL (PROTEGIDO POR LOGIN) */}
-              <button
-                type="button"
-                id="tab-btn-followup"
-                onClick={() => handleTabChange('followup')}
-                className={`flex items-center gap-2 px-3.5 md:px-4 py-2.5 min-h-[44px] text-xs font-mono font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                  activeTab === 'followup'
-                    ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 font-black'
-                    : 'text-slate-300 hover:text-white hover:bg-white/5 border border-transparent hover:border-white/10'
-                }`}
-              >
-                <CalendarClock size={15} className={activeTab === 'followup' ? 'text-black' : 'text-emerald-400'} />
-                <span>Follow-up Semanal</span>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
-                  activeTab === 'followup'
-                    ? 'bg-black/20 text-black'
-                    : isAuthUnlocked
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                }`}>
-                  {isAuthUnlocked ? 'Liberado' : 'Login'}
-                </span>
-              </button>
-            </nav>
+            {/* NAVEGAÇÃO DE ABAS RESPONSIVA COM BEAD DESLIZANTE (PC, MOBILE & PDT ZEBRA) */}
+            <TabBarBead
+              tabs={navigationTabs}
+              activeId={activeTab}
+              onChange={(id) => handleTabChange(id as TabType)}
+            />
           </>
         )}
 
@@ -1495,6 +1481,46 @@ export default function App() {
           )
         )}
 
+        {/* IBM AS/400 5250 RETRO COMMAND & FUNCTION KEY BAR */}
+        {theme === 'as400' && (
+          <div className="p-3 rounded-xl border border-emerald-500/50 bg-black/90 font-mono text-[0.72rem] text-emerald-400 flex flex-wrap items-center justify-between gap-2 select-none shadow-lg mt-6">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-black bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/40">=== IBM AS/400 (5250) ===</span>
+              <button 
+                type="button" 
+                onClick={() => sincronizarFila(true)}
+                className="hover:underline cursor-pointer"
+              >
+                <strong className="text-emerald-300">F5</strong>=Sincronizar
+              </button>
+              <button 
+                type="button" 
+                onClick={() => handleTabChange('gestao')}
+                className="hover:underline cursor-pointer"
+              >
+                <strong className="text-emerald-300">F9</strong>=ODBC/Gestão
+              </button>
+              <button 
+                type="button" 
+                onClick={() => handleTabChange('ruas')}
+                className="hover:underline cursor-pointer"
+              >
+                <strong className="text-emerald-300">F10</strong>=Reabastecimento
+              </button>
+              <button 
+                type="button" 
+                onClick={() => toggleTheme(addToast)}
+                className="hover:underline cursor-pointer text-emerald-300 font-bold"
+              >
+                <strong className="text-emerald-200">F24/Alt+T</strong>=Mudar Tema
+              </button>
+            </div>
+            <div className="text-[0.65rem] text-emerald-500/80 font-bold">
+              SISTEMA CONECTADO: DEMANDA x REALIZADO
+            </div>
+          </div>
+        )}
+
       </div>
 
       {screensaverEnabled && screensaverActive && (
@@ -1505,6 +1531,13 @@ export default function App() {
           currentRole={currentRole}
         />
       )}
+
+      {/* CENTRAL DE AJUDA & DOCUMENTAÇÃO */}
+      <HelpSupportModal
+        isOpen={showHelpModal}
+        onClose={() => setShowHelpModal(false)}
+        apiUrl={apiUrl}
+      />
     </div>
   );
 }

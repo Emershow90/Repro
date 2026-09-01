@@ -62,9 +62,9 @@ import {
 } from '../data/streetData';
 import { getState, saveState, getOperationalSyncQueue, clearOperationalSyncQueue } from '../dbLocal';
 import { postBatchToGoogleSheets } from '../sheetService';
-import AppsScriptHelper from './AppsScriptHelper';
 import DiagnosticsTelemetryView from './DiagnosticsTelemetryView';
 import OdbcQueryBridge from './OdbcQueryBridge';
+import HelpSupportModal from './HelpSupportModal';
 import { useUIStore } from '../stores/uiStore';
 
 interface ManagementModuleProps {
@@ -128,6 +128,8 @@ export default function ManagementModule({
   const [syncLogsResult, setSyncLogsResult] = useState<{ success: number; errors: number } | null>(null);
 
   const [copiedType, setCopiedType] = useState<string | null>(null);
+  const [showHelpModal, setShowHelpModal] = useState(false);
+  const [helpModalTab, setHelpModalTab] = useState<'manual' | 'sheets' | 'tv' | 'sql'>('sheets');
 
   const handleCopy = (text: string, type: string) => {
     navigator.clipboard.writeText(text);
@@ -741,8 +743,16 @@ export default function ManagementModule({
           streetSummaries={streetSummaries}
           syncQueueItems={syncQueueItems}
           eventsList={eventsList}
+          logs={logs}
           apiUrl={apiUrl}
           onAddToast={onAddToast}
+          onApplyDemands={async (newDemands) => {
+            const updated = { ...demands, ...newDemands };
+            setDemands(updated);
+            await saveState(STORAGE_DEMANDS_KEY, updated);
+            localStorage.setItem(STORAGE_DEMANDS_KEY, JSON.stringify(updated));
+            onAddToast('Demandas da Query ODBC integradas com sucesso!', 'var(--color-success)');
+          }}
         />
       )}
 
@@ -941,8 +951,32 @@ export default function ManagementModule({
             </div>
           </div>
 
-          {/* Script pronto para colar no Google Apps Script */}
-          <AppsScriptHelper />
+          {/* Card Executivo de Ajuda e Integração com Google Sheets */}
+          <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 to-slate-950 border border-emerald-500/20 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-emerald-400">
+                <FileSpreadsheet size={18} />
+                <h3 className="text-xs font-black uppercase tracking-wider font-mono">
+                  Instruções & Script do Google Sheets
+                </h3>
+              </div>
+              <p className="text-xs text-slate-400 max-w-xl">
+                O código de integração e o passo a passo completo estão centralizados no Manual de Ajuda para manter as telas limpas para o operador.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setHelpModalTab('sheets');
+                setShowHelpModal(true);
+              }}
+              className="px-4 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold font-mono uppercase flex items-center gap-2 cursor-pointer transition-all shrink-0"
+            >
+              <FileSpreadsheet size={15} />
+              <span>Ver Script & Passo a Passo</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -958,20 +992,20 @@ export default function ManagementModule({
               </h2>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Exiba os dados de <strong>Reabastecimento em tempo real</strong> em qualquer site externo, portal corporativo, intranet ou televisores de torre de controle. O site externo recebe os dados em <strong>modo somente leitura (Read-Only)</strong> diretamente do banco de dados, sem interferir na coleta dos operadores no galpão.
+              Exiba os dados de <strong>Reabastecimento em tempo real</strong> em qualquer site externo, portal corporativo, intranet ou televisores de torre de controle em <strong>modo somente leitura (Read-Only)</strong>.
             </p>
           </div>
 
-          {/* Opção 1: Incorporação Iframe / Standalone TV */}
+          {/* Card Modo TV */}
           <div className="p-5 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
               <div className="space-y-0.5">
                 <h3 className="text-xs font-black text-white uppercase flex items-center gap-2 font-mono">
                   <Tv size={15} className="text-cyan-400" />
-                  <span>Opção 1: Incorporar Dashboard Completo (Iframe / Standalone)</span>
+                  <span>Modo Standalone / Televisores de Torre</span>
                 </h3>
                 <p className="text-[0.65rem] text-slate-400">
-                  Ideal para embutir no site externo com 1 linha de HTML sem precisar programar nada.
+                  URL direta para exibição em tela cheia na torre de controle ou embutir em portais.
                 </p>
               </div>
 
@@ -1011,113 +1045,19 @@ export default function ManagementModule({
               </div>
             </div>
 
-            {/* Código Iframe HTML */}
-            <div className="space-y-1.5">
-              <label className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                Código HTML para colar no seu site externo:
-              </label>
-              <div className="relative bg-black p-3.5 rounded-xl border border-white/10 font-mono text-xs text-slate-300 overflow-x-auto">
-                <pre className="text-[0.72rem] leading-relaxed text-cyan-200">
-{`<iframe
-  src="${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}?view=gestao&standalone=true"
-  title="Torre de Gestão REPRO"
-  width="100%"
-  height="850"
-  style="border: none; border-radius: 16px; background: #020617;"
-  loading="lazy">
-</iframe>`}
-                </pre>
-                <button
-                  type="button"
-                  onClick={() => handleCopy(`<iframe src="${window.location.origin + window.location.pathname}?view=gestao&standalone=true" title="Torre de Gestão REPRO" width="100%" height="850" style="border: none; border-radius: 16px; background: #020617;" loading="lazy"></iframe>`, 'iframe')}
-                  className="absolute top-2 right-2 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white text-[0.65rem] font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all border border-white/10 font-mono"
-                >
-                  {copiedType === 'iframe' ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
-                  <span>{copiedType === 'iframe' ? 'Copiado!' : 'Copiar HTML'}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Opção 2: Consumo de Dados via API JSON */}
-          <div className="p-5 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-4">
-            <div className="space-y-0.5 border-b border-white/10 pb-3">
-              <h3 className="text-xs font-black text-white uppercase flex items-center gap-2 font-mono">
-                <Code size={15} className="text-emerald-400" />
-                <span>Opção 2: Consumir Apenas os Dados em Tempo Real (REST / JSON)</span>
-              </h3>
-              <p className="text-[0.65rem] text-slate-400">
-                Se você já possui um front-end próprio no site externo e quer receber os números para alimentar seus componentes.
-              </p>
-            </div>
-
-            {/* Endpoint configurado */}
-            <div className="space-y-1.5">
-              <label className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                Endpoint da Planilha / Google Apps Script:
-              </label>
-              <div className="flex items-center gap-2 bg-slate-900 p-2.5 rounded-xl border border-white/10">
-                <input
-                  type="text"
-                  readOnly
-                  value={apiUrl || 'https://script.google.com/macros/s/AKfycbwzg8jDY71b5sMc6Q_qMii3YYQrdyKROuPe9l24iyEtke1Zhx9cCEt1R7xhxmtjN5aK2A/exec'}
-                  className="bg-transparent text-xs text-emerald-400 focus:outline-none w-full font-mono select-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleCopy(apiUrl || 'https://script.google.com/macros/s/AKfycbwzg8jDY71b5sMc6Q_qMii3YYQrdyKROuPe9l24iyEtke1Zhx9cCEt1R7xhxmtjN5aK2A/exec', 'api')}
-                  className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all shrink-0 font-mono"
-                >
-                  {copiedType === 'api' ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
-                  <span>{copiedType === 'api' ? 'Copiado!' : 'Copiar Endpoint'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Snippet JavaScript */}
-            <div className="space-y-1.5">
-              <label className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                Código JavaScript pronto para o seu site externo:
-              </label>
-              <div className="relative bg-black p-3.5 rounded-xl border border-white/10 font-mono text-xs text-slate-300 overflow-x-auto">
-                <pre className="text-[0.70rem] leading-relaxed text-emerald-300">
-{`// Função para carregar os dados no site externo a cada 10 segundos
-async function fetchReabastecimentoLive() {
-  const endpoint = '${apiUrl || "https://script.google.com/macros/s/AKfycbwzg8jDY71b5sMc6Q_qMii3YYQrdyKROuPe9l24iyEtke1Zhx9cCEt1R7xhxmtjN5aK2A/exec"}';
-  
-  try {
-    const res = await fetch(endpoint + '?action=getDemands');
-    const data = await res.json();
-    console.log("Dados de Reabastecimento em tempo real:", data);
-    // Atualize sua interface com os dados recebidos...
-  } catch (err) {
-    console.error("Falha ao sincronizar feed de reabastecimento:", err);
-  }
-}
-
-setInterval(fetchReabastecimentoLive, 10000);
-fetchReabastecimentoLive();`}
-                </pre>
-                <button
-                  type="button"
-                  onClick={() => handleCopy(`async function fetchReabastecimentoLive() {
-  const endpoint = '${apiUrl || "https://script.google.com/macros/s/AKfycbwzg8jDY71b5sMc6Q_qMii3YYQrdyKROuPe9l24iyEtke1Zhx9cCEt1R7xhxmtjN5aK2A/exec"}';
-  try {
-    const res = await fetch(endpoint + '?action=getDemands');
-    const data = await res.json();
-    console.log("Dados de Reabastecimento em tempo real:", data);
-  } catch (err) {
-    console.error("Falha ao sincronizar feed:", err);
-  }
-}
-setInterval(fetchReabastecimentoLive, 10000);
-fetchReabastecimentoLive();`, 'js')}
-                  className="absolute top-2 right-2 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white text-[0.65rem] font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all border border-white/10 font-mono"
-                >
-                  {copiedType === 'js' ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
-                  <span>{copiedType === 'js' ? 'Copiado!' : 'Copiar Código'}</span>
-                </button>
-              </div>
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-[0.65rem] text-slate-400">Precisa do código HTML do iframe ou da API de integração?</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setHelpModalTab('tv');
+                  setShowHelpModal(true);
+                }}
+                className="text-xs text-cyan-400 hover:text-cyan-300 font-bold font-mono underline cursor-pointer flex items-center gap-1"
+              >
+                <span>Ver códigos na Central de Ajuda</span>
+                <ChevronRight size={13} />
+              </button>
             </div>
           </div>
         </div>
@@ -1128,6 +1068,13 @@ fetchReabastecimentoLive();`, 'js')}
         <DiagnosticsTelemetryView />
       )}
 
+      {/* MODAL DE AJUDA & DOCUMENTAÇÃO */}
+      <HelpSupportModal
+        isOpen={showHelpModal}
+        onClose={() => setShowHelpModal(false)}
+        apiUrl={apiUrl}
+        initialTab={helpModalTab}
+      />
     </div>
   );
 }

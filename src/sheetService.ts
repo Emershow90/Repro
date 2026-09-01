@@ -157,6 +157,7 @@ export async function postToGoogleSheets(apiUrlInput: string, log: Log): Promise
     data: log.data,
     semana: log.semana,
     semanaAno: new Date().getFullYear(),
+    activity: log.atividade, // support both keys just in case
     atividade: log.atividade,
     colaborador: log.colaborador,
     qtdEnderecos: log.volumes,
@@ -167,7 +168,7 @@ export async function postToGoogleSheets(apiUrlInput: string, log: Log): Promise
     horaFim: log.horaFim || ''
   };
 
-  // Tier 1: Try Server-side proxy first if backend API is available
+  // Tier 1: Try Server-side proxy first if backend API is available (active on Node.js/Cloud Run)
   try {
     const proxyRes = await fetch('/api/sheets/proxy', {
       method: 'POST',
@@ -176,11 +177,16 @@ export async function postToGoogleSheets(apiUrlInput: string, log: Log): Promise
     });
 
     if (proxyRes.ok) {
-      const result = await proxyRes.json();
-      if (result.status === 'success') return true;
+      const contentType = proxyRes.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const result = await proxyRes.json();
+        if (result && result.status === 'success') {
+          return true;
+        }
+      }
     }
   } catch {
-    // Ignore server proxy errors and try direct client fetch
+    // Ignore server proxy errors and fall back to client-side methods
   }
 
   // Tier 2: Direct browser fetch with standard CORS
@@ -196,21 +202,10 @@ export async function postToGoogleSheets(apiUrlInput: string, log: Log): Promise
       return true;
     }
   } catch (err) {
-    console.warn('Direct Google Sheets POST error, trying JSONP fallback:', err);
+    console.warn('Direct Google Sheets CORS POST error, trying no-cors fallback:', err);
   }
 
-  // Tier 3: JSONP Fallback via GET (Action: insert) to bypass Google Workspace CORS / Auth redirects
-  try {
-    const insertUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'action=insert&payload=' + encodeURIComponent(JSON.stringify(payload));
-    const result = await jsonpFetch(insertUrl);
-    if (result && (result.status === 'sucesso' || result.status === 'success')) {
-      return true;
-    }
-  } catch (err) {
-    console.warn('Google Sheets JSONP Insert error:', err);
-  }
-
-  // Tier 4: Direct browser fetch with mode: 'no-cors'
+  // Tier 3: Direct browser fetch with mode: 'no-cors' (Reliable write-only bypass for static hosts like Vercel)
   try {
     await fetch(apiUrl, {
       method: 'POST',
@@ -218,7 +213,10 @@ export async function postToGoogleSheets(apiUrlInput: string, log: Log): Promise
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload)
     });
-    return true; // Assume success for opaque response if JSONP failed
+    // With 'no-cors', the response is opaque, meaning we can't inspect the body.
+    // However, since the browser successfully sends the request to the Google script endpoint,
+    // we can safely assume success for the transmission.
+    return true;
   } catch (err) {
     console.warn('Google Sheets no-cors POST error:', err);
     return false;
@@ -232,7 +230,7 @@ export async function postBatchToGoogleSheets(apiUrlInput: string, payload: unkn
   if (!apiUrlInput || !apiUrlInput.startsWith('http')) return false;
   const apiUrl = normalizeSheetUrl(apiUrlInput);
 
-  // Tier 1: Try Server-side proxy first if backend API is available
+  // Tier 1: Try Server-side proxy first if backend API is available (active on Node.js/Cloud Run)
   try {
     const proxyRes = await fetch('/api/sheets/proxy', {
       method: 'POST',
@@ -241,8 +239,13 @@ export async function postBatchToGoogleSheets(apiUrlInput: string, payload: unkn
     });
 
     if (proxyRes.ok) {
-      const result = await proxyRes.json();
-      if (result.status === 'success') return true;
+      const contentType = proxyRes.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const result = await proxyRes.json();
+        if (result && result.status === 'success') {
+          return true;
+        }
+      }
     }
   } catch {
     // Fallback to client fetch
@@ -261,21 +264,10 @@ export async function postBatchToGoogleSheets(apiUrlInput: string, payload: unkn
       return true;
     }
   } catch (err) {
-    console.warn('Direct Google Sheets POST batch error, trying JSONP fallback:', err);
+    console.warn('Direct Google Sheets CORS POST batch error, trying no-cors fallback:', err);
   }
 
-  // Tier 3: JSONP Fallback via GET (Action: insert) to bypass Google Workspace CORS / Auth redirects
-  try {
-    const insertUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'action=insert&payload=' + encodeURIComponent(JSON.stringify(payload));
-    const result = await jsonpFetch(insertUrl);
-    if (result && (result.status === 'sucesso' || result.status === 'success')) {
-      return true;
-    }
-  } catch (err) {
-    console.warn('Google Sheets JSONP Insert batch error:', err);
-  }
-
-  // Tier 4: Direct browser fetch with mode: 'no-cors'
+  // Tier 3: Direct browser fetch with mode: 'no-cors' (Reliable write-only bypass for static hosts like Vercel)
   try {
     await fetch(apiUrl, {
       method: 'POST',

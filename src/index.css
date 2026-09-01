@@ -230,3 +230,202 @@ option {
   font-size: 0.75rem;
   box-shadow: 0 10px 25px rgba(0,0,0,0.5);
 }
+
+/* Torre Theme & Bead Navigation variables */
+:root {
+  --torre-bg: #0b0d13;
+  --torre-bg-elevated: rgba(18, 21, 30, 0.75);
+  --torre-border: rgba(255, 255, 255, 0.08);
+  --torre-emerald: #10b981;
+  --torre-emerald-glow: rgba(16, 185, 129, 0.35);
+  --torre-text-dim: #94a3b8;
+}
+
+.torre-mono {
+  font-family: var(--font-mono), monospace;
+}
+
+/* ==========================================================================
+   IBM AS/400 5250 RETRO TERMINAL THEME (100% VINTAGE CRT GREEN SCREEN)
+   ========================================================================== */
+html.theme-as400,
+body.theme-as400,
+.theme-as400 {
+  --color-terminal-bg: #000000 !important;
+  --color-terminal-panel: #000802 !important;
+  --color-terminal-border: #00ff66 !important;
+  --color-terminal-text: #00ff66 !important;
+  --color-terminal-accent: #00ff66 !important;
+  --color-terminal-accent-glow: rgba(0, 255, 102, 0.4) !important;
+  --color-success: #00ff66 !important;
+  --color-warning: #ffcc00 !important;
+  --color-info: #00ffff !important;
+  --color-danger: #ff3333 !important;
+
+  --torre-bg: #000000 !important;
+  --torre-bg-elevated: #020b04 !important;
+  --torre-border: #00ff66 !important;
+  --torre-emerald: #00ff66 !important;
+  --torre-emerald-glow: rgba(0, 255, 102, 0.4) !important;
+  --torre-text-dim: #00cc55 !important;
+
+  font-family: var(--font-mono), 'Courier New', 'Lucida Console', Monaco, monospace !important;
+  background-color: #000000 !important;
+  color: #00ff66 !important;
+}
+
+.theme-as400 *,
+.theme-as400 *::before,
+.theme-as400 *::after {
+  font-family: var(--font-mono), 'Courier New', 'Lucida Console', Monaco, monospace !important;
+  letter-spacing: 0.03em !important;
+}
+
+.theme-as400 body {
+  background-color: #000000 !important;
+  color: #00ff66 !important;
+}
+
+/* Authentic CRT Scanline overlay */
+.theme-as400::before {
+  content: " ";
+  display: block;
+  position: fixed;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.35) 50%);
+  background-size: 100% 4px;
+  z-index: 99999;
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+/* AS/400 Panels & Cards - Sharp 1px borders, zero radius, pitch black interior */
+.theme-as400 .border-panel,
+.theme-as400 .bg-slate-950,
+.theme-as400 .bg-slate-900,
+.theme-as400 .bg-slate-900\/90,
+.theme-as400 .bg-slate-950\/90,
+.theme-as400 .bg-slate-950\/80,
+.theme-as400 .bg-slate-950\/95,
+.theme-as400 .bg-gradient-to-r,
+.theme-as400 .bg-gradient-to-b {
+  background: #000000 !important;
+  background-image: none !important;
+  border-color: #00ff66 !important;
+  border-width: 1px !important;
+  border-radius: 0px !important;
+  box-shadow: none !important;
+}
+
+/* AS/400 Buttons - Flat retro 5250 inverted action style */
+.theme-as400 button,
+.theme-as400 .btn-term,
+.theme-as400 a {
+  border-radius: 0px !important;
+  border-width: 1px !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.theme-as400 .btn-term-active,
+.theme-as400 .btn-primary,
+.theme-as400 .bg-emerald-500,
+.theme-as400 .bg-emerald-400 {
+  background: #00ff66 !important;
+  color: #000000 !important;
+  font-weight: 900 !important;
+  border-color: #00ff66 !important;
+}
+
+.theme-as400 button:hover:not(:disabled) {
+  background: #00ff66 !important;
+  color: #000000 !important;
+  border-color: #00ff66 !important;
+}
+
+.theme-as400 button:disabled {
+  border-color: #005522 !important;
+  color: #005522 !important;
+  background: #000000 !important;
+}
+
+/* Text Colors in AS/400 */
+.theme-as400 .text-white,
+.theme-as400 .text-slate-100,
+.theme-as400 .text-slate-200,
+.theme-as400 .text-slate-300 {
+  color: #00ff66 !important;
+}
+
+.theme-as400 .text-slate-400,
+.theme-as400 .text-slate-500,
+.theme-as400 .text-slate-600 {
+  color: #00b347 !important;
+}
+
+.theme-as400 .text-cyan-300,
+.theme-as400 .text-cyan-400,
+.theme-as400 .text-blue-300,
+.theme-as400 .text-blue-400 {
+  color: #00ffff !important;
+}
+
+.theme-as400 .text-amber-300,
+.theme-as400 .text-amber-400,
+.theme-as400 .text-yellow-400 {
+  color: #ffff00 !important;
+}
+
+.theme-as400 .text-rose-300,
+.theme-as400 .text-rose-400,
+.theme-as400 .text-red-400 {
+  color: #ff3333 !important;
+}
+
+.theme-as400 .text-purple-200,
+.theme-as400 .text-purple-300,
+.theme-as400 .text-purple-400 {
+  color: #00ffff !important;
+}
+
+/* Inputs & Form Controls */
+.theme-as400 input,
+.theme-as400 select,
+.theme-as400 textarea {
+  background-color: #000000 !important;
+  border: 1px solid #00ff66 !important;
+  color: #00ff66 !important;
+  border-radius: 0px !important;
+  box-shadow: none !important;
+}
+
+.theme-as400 input:focus,
+.theme-as400 select:focus,
+.theme-as400 textarea:focus {
+  background-color: #001a05 !important;
+  border-color: #00ff66 !important;
+  outline: none !important;
+  box-shadow: 0 0 8px rgba(0, 255, 102, 0.6) !important;
+}
+
+/* Toasts in AS/400 */
+.theme-as400 .toast-custom {
+  background: #000000 !important;
+  border: 2px solid #00ff66 !important;
+  color: #00ff66 !important;
+  border-radius: 0px !important;
+  box-shadow: 0 0 15px rgba(0, 255, 102, 0.4) !important;
+}
+
+/* Disable blur and rounded corners everywhere in AS/400 mode */
+.theme-as400 .backdrop-blur-sm,
+.theme-as400 .backdrop-blur-md,
+.theme-as400 .rounded-full,
+.theme-as400 .rounded-xl,
+.theme-as400 .rounded-2xl,
+.theme-as400 .rounded-3xl {
+  backdrop-filter: none !important;
+  border-radius: 0px !important;
+}
+
+

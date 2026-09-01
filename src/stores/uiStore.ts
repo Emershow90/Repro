@@ -7,15 +7,19 @@ export interface Toast {
 }
 
 export type TabType = 'cronometro' | 'ruas' | 'gestao' | 'painel' | 'historico' | 'followup';
+export type AppTheme = 'torre' | 'as400';
 
 interface UIState {
   activeTab: TabType;
+  theme: AppTheme;
   screensaverEnabled: boolean;
   screensaverTimeout: number;
   screensaverActive: boolean;
   toasts: Toast[];
   supabaseLoading: boolean;
   handleTabChange: (tab: TabType) => void;
+  toggleTheme: (addToast?: (msg: string, col?: string) => void) => void;
+  setTheme: (theme: AppTheme, addToast?: (msg: string, col?: string) => void) => void;
   setScreensaverActive: (active: boolean) => void;
   updateScreensaverEnabled: (enabled: boolean, addToast?: (msg: string, col?: string) => void) => void;
   updateScreensaverTimeout: (timeout: number, addToast?: (msg: string, col?: string) => void) => void;
@@ -25,6 +29,13 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>((set) => ({
+  theme: (() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('repro_theme') as AppTheme;
+      if (saved === 'as400' || saved === 'torre') return saved;
+    }
+    return 'torre';
+  })(),
   activeTab: (() => {
     // 1. Prioridade: Parâmetro direto na URL (?tab=ruas, ?tab=gestao, ?view=gestao, etc.)
     if (typeof window !== 'undefined' && window.location.search) {
@@ -52,7 +63,57 @@ export const useUIStore = create<UIState>((set) => ({
   supabaseLoading: false,
   handleTabChange: (tab) => {
     localStorage.setItem('repro_active_tab', tab);
+    if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('tab', tab);
+        window.history.replaceState(null, '', url.pathname + url.search);
+      } catch (e) {
+        console.error("Failed to update URL param:", e);
+      }
+    }
     set({ activeTab: tab });
+  },
+  toggleTheme: (addToast) => {
+    set((state) => {
+      const nextTheme = state.theme === 'as400' ? 'torre' : 'as400';
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('repro_theme', nextTheme);
+        if (nextTheme === 'as400') {
+          document.documentElement.classList.add('theme-as400');
+        } else {
+          document.documentElement.classList.remove('theme-as400');
+        }
+      }
+      if (addToast) {
+        addToast(
+          nextTheme === 'as400' 
+            ? '📟 TEMA IBM AS/400 5250 ATIVADO (Fósforo Verde)' 
+            : '🌑 TEMA TORRE OBSIDIAN ATIVADO', 
+          nextTheme === 'as400' ? '#00ff66' : 'var(--color-terminal-accent)'
+        );
+      }
+      return { theme: nextTheme };
+    });
+  },
+  setTheme: (theme, addToast) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('repro_theme', theme);
+      if (theme === 'as400') {
+        document.documentElement.classList.add('theme-as400');
+      } else {
+        document.documentElement.classList.remove('theme-as400');
+      }
+    }
+    set({ theme });
+    if (addToast) {
+      addToast(
+        theme === 'as400' 
+          ? '📟 TEMA IBM AS/400 5250 ATIVADO (Fósforo Verde)' 
+          : '🌑 TEMA TORRE OBSIDIAN ATIVADO', 
+        theme === 'as400' ? '#00ff66' : 'var(--color-terminal-accent)'
+      );
+    }
   },
   setScreensaverActive: (active) => set((state) => ({ 
     screensaverActive: state.screensaverEnabled ? active : false 

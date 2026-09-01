@@ -22,14 +22,16 @@ import {
   ChevronRight,
   Filter
 } from 'lucide-react';
-import { StreetSummary, OperationalEvent } from '../types';
+import { StreetSummary, OperationalEvent, Log, ReproDemand } from '../types';
 
 interface OdbcQueryBridgeProps {
   streetSummaries: StreetSummary[];
   syncQueueItems: any[];
   eventsList: OperationalEvent[];
+  logs?: Log[];
   apiUrl: string;
   onAddToast: (msg: string, color?: string) => void;
+  onApplyDemands?: (demands: Record<string, ReproDemand>) => void;
 }
 
 export interface WmsQueryDef {
@@ -431,8 +433,10 @@ export default function OdbcQueryBridge({
   streetSummaries,
   syncQueueItems,
   eventsList,
+  logs = [],
   apiUrl,
-  onAddToast
+  onAddToast,
+  onApplyDemands
 }: OdbcQueryBridgeProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('Reabastecimento');
   const [selectedQueryId, setSelectedQueryId] = useState<string>('AUD001');
@@ -441,6 +445,87 @@ export default function OdbcQueryBridge({
   const [isExecuting, setIsExecuting] = useState(false);
   const [queryOutput, setQueryOutput] = useState<any[] | null>(null);
   const [codeLanguage, setCodeLanguage] = useState<'csharp' | 'python' | 'curl'>('csharp');
+  const [auditFilter, setAuditFilter] = useState<'TODOS' | 'BATIDO' | 'DIVERGENCIA' | 'PENDENTE'>('TODOS');
+
+  // Realizado Manual consolidado por Setor + Rua a partir dos logs reais
+  const manualDoneByStreet = useMemo(() => {
+    const map: Record<string, { volumes: number; enderecos: number; horas: number; operadores: string[]; count: number }> = {};
+    
+    logs.forEach(l => {
+      const act = (l.atividade || '').toUpperCase();
+      if (!act.includes('REABASTECIMENTO')) return;
+      const rua = (l.rua || act.replace(/REABASTECIMENTO\s*-\s*/i, '')).trim().toUpperCase();
+      if (!rua) return;
+      
+      const sec = (l.setor || '87').trim();
+      const key = `${sec}_${rua}`;
+      if (!map[key]) {
+        map[key] = { volumes: 0, enderecos: 0, horas: 0, operadores: [], count: 0 };
+      }
+      map[key].volumes += Number(l.volumes) || 0;
+      map[key].enderecos += Number(l.enderecos) || 0;
+      map[key].horas += Number(l.horas) || 0;
+      if (l.colaborador && !map[key].operadores.includes(l.colaborador)) {
+        map[key].operadores.push(l.colaborador);
+      }
+      map[key].count += 1;
+    });
+
+    return map;
+  }, [logs]);
+
+  // Auditoria Cruzada: Demanda WMS (Query) x Feito Manual (Operadores)
+  const crossAuditList = useMemo(() => {
+    return streetSummaries.map(s => {
+      const key = `${s.setor}_${s.rua}`;
+      const manual = manualDoneByStreet[key] || { volumes: s.realizado, enderecos: s.enderecos, horas: s.tempoTotalSegundos / 3600, operadores: [], count: 0 };
+      
+      const dem = s.demanda !== null ? s.demanda : 0;
+      const feitoManual = manual.volumes;
+      const diferenca = dem > 0 ? dem - feitoManual : 0;
+      const cob = dem > 0 ? Number(((feitoManual / dem) * 100).toFixed(1)) : (feitoManual > 0 ? 100 : 0);
+
+      let auditStatus: 'BATIDO' | 'EM_ANDAMENTO' | 'PENDENTE' | 'EXCEDENTE' = 'PENDENTE';
+      if (dem > 0) {
+        if (feitoManual > dem) auditStatus = 'EXCEDENTE';
+        else if (feitoManual >= dem) auditStatus = 'BATIDO';
+        else if (feitoManual > 0) auditStatus = 'EM_ANDAMENTO';
+        else auditStatus = 'PENDENTE';
+      } else {
+        if (feitoManual > 0) auditStatus = 'BATIDO';
+        else auditStatus = 'PENDENTE';
+      }
+
+      return {
+        setor: s.setor,
+        rua: s.rua,
+        demandaWms: s.demanda,
+        feitoManual,
+        diferenca,
+        cobertura: cob,
+        enderecos: manual.enderecos || s.enderecos,
+        tempoMinutos: Math.round(manual.horas * 60) || Math.round(s.tempoTotalSegundos / 60),
+        operadores: manual.operadores,
+        count: manual.count,
+        auditStatus
+      };
+    });
+  }, [streetSummaries, manualDoneByStreet]);
+
+  // Totais da Auditoria Cruzada
+  const auditTotals = useMemo(() => {
+    const totalDemanda = crossAuditList.reduce((acc, a) => acc + (a.demandaWms || 0), 0);
+    const totalFeito = crossAuditList.reduce((acc, a) => acc + a.feitoManual, 0);
+    const totalDivergencia = crossAuditList.reduce((acc, a) => acc + (a.diferenca > 0 ? a.diferenca : 0), 0);
+    const batidas = crossAuditList.filter(a => a.auditStatus === 'BATIDO' || a.auditStatus === 'EXCEDENTE').length;
+    return {
+      totalDemanda,
+      totalFeito,
+      totalDivergencia,
+      batidas,
+      totalRuas: crossAuditList.length
+    };
+  }, [crossAuditList]);
 
   const selectedQuery = useMemo(() => {
     return WMS_QUERIES.find(q => q.id === selectedQueryId) || WMS_QUERIES[0];
@@ -617,96 +702,141 @@ if __name__ == "__main__":
         </div>
       </div>
 
-      {/* PAINEL 1: TABELA OFICIAL DE REABASTECIMENTO (AUDITORIA) SOLICITADA */}
-      <div className="p-4 rounded-2xl bg-slate-950 border border-emerald-500/30 shadow-xl space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
-            <Activity size={18} className="text-emerald-400" />
-            <h3 className="text-xs font-black uppercase text-white tracking-wider">
-              Auditoria de Reabastecimento por Setor / Rua
-            </h3>
-            <span className="px-2 py-0.5 text-[0.62rem] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full font-bold">
-              {streetSummaries.length} Registros Ao Vivo
-            </span>
+      {/* PAINEL 1: AUDITORIA CRUZADA (QUERY OBD WMS x FEITO MANUAL DOS OPERADORES) */}
+      <div className="p-4 rounded-2xl bg-slate-950 border border-emerald-500/40 shadow-2xl space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2 border-b border-white/10 pb-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+              <Activity size={20} />
+            </div>
+            <div>
+              <h3 className="text-sm font-black uppercase text-white tracking-wider flex items-center gap-2">
+                <span>Auditoria Cruzada: Query ODBC WMS x Feito Manual (Chão de Galpão)</span>
+                <span className="px-2 py-0.5 text-[0.62rem] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full font-bold">
+                  {crossAuditList.length} Ruas Auditadas
+                </span>
+              </h3>
+              <p className="text-[0.68rem] text-slate-400 mt-0.5">
+                Confronto direto entre a demanda retornada pelas queries SQL do WMS e os apontamentos manuais dos operadores
+              </p>
+            </div>
           </div>
 
-          <div className="text-[0.68rem] text-slate-400 flex items-center gap-2">
-            <span>Colunas: <strong className="text-slate-200">Setor | Rua | Status | Demanda | Realizado | Pendente | Cobertura | EPH | VPH | Tempo | Ações</strong></span>
+          {/* Filtros de Auditoria */}
+          <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-white/10">
+            {(['TODOS', 'BATIDO', 'DIVERGENCIA', 'PENDENTE'] as const).map(f => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setAuditFilter(f)}
+                className={`px-2.5 py-1 text-[0.62rem] font-bold uppercase rounded-lg transition-all cursor-pointer ${
+                  auditFilter === f
+                    ? 'bg-emerald-500 text-black font-black shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {f === 'TODOS' ? 'Todas' : f === 'BATIDO' ? 'Batidas (100%)' : f === 'DIVERGENCIA' ? 'Divergências' : 'Pendentes'}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Tabela de Auditoria */}
+        {/* Cards de Métricas da Auditoria Cruzada */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+          <div className="p-2.5 rounded-xl bg-slate-900/90 border border-white/10">
+            <span className="text-[0.6rem] text-slate-400 uppercase font-bold block">Demanda WMS (Query)</span>
+            <span className="text-base sm:text-lg font-black text-white font-mono">{auditTotals.totalDemanda} cx</span>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-slate-900/90 border border-cyan-500/30">
+            <span className="text-[0.6rem] text-cyan-400 uppercase font-bold block">Feito Manual (Operadores)</span>
+            <span className="text-base sm:text-lg font-black text-cyan-300 font-mono">{auditTotals.totalFeito} cx</span>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-slate-900/90 border border-amber-500/30">
+            <span className="text-[0.6rem] text-amber-400 uppercase font-bold block">Divergência / Saldo</span>
+            <span className="text-base sm:text-lg font-black text-amber-300 font-mono">{auditTotals.totalDivergencia} cx</span>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-slate-900/90 border border-emerald-500/30">
+            <span className="text-[0.6rem] text-emerald-400 uppercase font-bold block">Ruas Batidas (100%)</span>
+            <span className="text-base sm:text-lg font-black text-emerald-300 font-mono">{auditTotals.batidas} / {auditTotals.totalRuas}</span>
+          </div>
+        </div>
+
+        {/* Tabela de Auditoria Cruzada */}
         <div className="overflow-x-auto rounded-xl border border-white/10 bg-slate-900/60 shadow-inner">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
-              <tr className="bg-slate-950/80 text-[0.68rem] uppercase text-slate-400 border-b border-white/10 font-black tracking-wider">
+              <tr className="bg-slate-950/90 text-[0.65rem] uppercase text-slate-400 border-b border-white/10 font-black tracking-wider">
                 <th className="p-2.5">Setor</th>
                 <th className="p-2.5">Rua</th>
-                <th className="p-2.5">Status</th>
-                <th className="p-2.5 text-right">Demanda</th>
-                <th className="p-2.5 text-right">Realizado</th>
-                <th className="p-2.5 text-right">Pendente</th>
+                <th className="p-2.5 text-right">Demanda WMS</th>
+                <th className="p-2.5 text-right">Feito Manual</th>
+                <th className="p-2.5 text-right">Diferença</th>
                 <th className="p-2.5 text-right">Cobertura</th>
-                <th className="p-2.5 text-right">EPH</th>
-                <th className="p-2.5 text-right">VPH</th>
+                <th className="p-2.5">Operadores</th>
                 <th className="p-2.5 text-right">Tempo</th>
+                <th className="p-2.5 text-center">Status Auditoria</th>
                 <th className="p-2.5 text-center">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5 text-[0.72rem]">
-              {streetSummaries.length === 0 ? (
+              {crossAuditList.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-slate-500 italic">
-                    Nenhuma rua configurada ou cadastrada para a data selecionada.
+                  <td colSpan={10} className="p-6 text-center text-slate-500 italic">
+                    Nenhum registro encontrado para auditoria.
                   </td>
                 </tr>
               ) : (
-                streetSummaries.map((s, idx) => {
-                  const statusBg = s.status === 'ATENDIDA'
-                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                    : s.status === 'EXCEDENTE'
-                    ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
-                    : s.status === 'EM_ANDAMENTO'
-                    ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                    : 'bg-slate-800 text-slate-400 border-slate-700';
+                crossAuditList
+                  .filter(a => {
+                    if (auditFilter === 'BATIDO') return a.auditStatus === 'BATIDO' || a.auditStatus === 'EXCEDENTE';
+                    if (auditFilter === 'DIVERGENCIA') return a.diferenca > 0 && a.feitoManual > 0;
+                    if (auditFilter === 'PENDENTE') return a.auditStatus === 'PENDENTE';
+                    return true;
+                  })
+                  .map((a, idx) => {
+                    const statusBadge = a.auditStatus === 'BATIDO'
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : a.auditStatus === 'EXCEDENTE'
+                      ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+                      : a.auditStatus === 'EM_ANDAMENTO'
+                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                      : 'bg-amber-500/15 text-amber-300 border-amber-500/30';
 
-                  const formatSecs = (sec: number) => {
-                    const m = Math.floor(sec / 60);
-                    const h = Math.floor(m / 60);
-                    const rM = m % 60;
-                    if (h > 0) return `${h}h ${rM}m`;
-                    return `${rM}m`;
-                  };
-
-                  return (
-                    <tr key={s.rua + idx} className="hover:bg-white/5 transition-colors">
-                      <td className="p-2.5 font-bold text-slate-300">{s.setor}</td>
-                      <td className="p-2.5 font-black text-emerald-400">{s.rua}</td>
-                      <td className="p-2.5">
-                        <span className={`px-2 py-0.5 rounded-full text-[0.6rem] font-black border ${statusBg}`}>
-                          {s.status}
-                        </span>
-                      </td>
-                      <td className="p-2.5 text-right font-bold text-white">{s.demanda !== null ? s.demanda : '-'}</td>
-                      <td className="p-2.5 text-right font-black text-cyan-300">{s.realizado}</td>
-                      <td className="p-2.5 text-right font-bold text-amber-300">{s.pendente !== null ? s.pendente : '-'}</td>
-                      <td className="p-2.5 text-right font-bold text-emerald-300">{s.coberturaPercent !== null ? `${s.coberturaPercent}%` : '-'}</td>
-                      <td className="p-2.5 text-right font-mono text-purple-300">{s.eph}</td>
-                      <td className="p-2.5 text-right font-mono text-indigo-300">{s.vph}</td>
-                      <td className="p-2.5 text-right text-slate-400">{formatSecs(s.tempoTotalSegundos)}</td>
-                      <td className="p-2.5 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(`SELECT * FROM NEWGES.MTASREP WHERE ASTGC2 = '${s.rua}'`, `SQL Rua ${s.rua}`)}
-                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[0.62rem] font-bold border border-white/10 transition-all cursor-pointer inline-flex items-center gap-1"
-                        >
-                          <Code size={11} />
-                          <span>Copiar SQL</span>
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
+                    return (
+                      <tr key={a.rua + idx} className="hover:bg-white/5 transition-colors">
+                        <td className="p-2.5 font-bold text-slate-300">{a.setor}</td>
+                        <td className="p-2.5 font-black text-emerald-400">{a.rua}</td>
+                        <td className="p-2.5 text-right font-bold text-white font-mono">{a.demandaWms !== null ? `${a.demandaWms} cx` : '-'}</td>
+                        <td className="p-2.5 text-right font-black text-cyan-300 font-mono">{a.feitoManual} cx</td>
+                        <td className={`p-2.5 text-right font-bold font-mono ${a.diferenca === 0 ? 'text-emerald-400' : a.diferenca > 0 ? 'text-amber-400' : 'text-purple-300'}`}>
+                          {a.demandaWms !== null ? `${a.diferenca > 0 ? `-${a.diferenca}` : `+${Math.abs(a.diferenca)}`} cx` : '-'}
+                        </td>
+                        <td className="p-2.5 text-right font-bold text-emerald-300 font-mono">{a.cobertura}%</td>
+                        <td className="p-2.5 text-slate-300 text-[0.65rem] truncate max-w-[140px]" title={a.operadores.join(', ')}>
+                          {a.operadores.length > 0 ? a.operadores.join(', ') : <span className="text-slate-500 italic">Sem apontamento</span>}
+                        </td>
+                        <td className="p-2.5 text-right text-purple-300 font-mono">{a.tempoMinutos}m</td>
+                        <td className="p-2.5 text-center">
+                          <span className={`px-2 py-0.5 rounded-full text-[0.6rem] font-black border uppercase ${statusBadge}`}>
+                            {a.auditStatus === 'BATIDO' ? '✓ 100% BATIDO' : a.auditStatus === 'EXCEDENTE' ? '★ EXCEDENTE' : a.auditStatus === 'EM_ANDAMENTO' ? '⏳ ANDAMENTO' : '⚠️ PENDENTE'}
+                          </span>
+                        </td>
+                        <td className="p-2.5 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(`SELECT * FROM NEWGES.MTASREP WHERE ASTGC2 = '${a.rua}'`, `SQL Rua ${a.rua}`)}
+                            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[0.62rem] font-bold border border-white/10 transition-all cursor-pointer inline-flex items-center gap-1"
+                          >
+                            <Code size={11} />
+                            <span>SQL</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
               )}
             </tbody>
           </table>
