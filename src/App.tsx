@@ -1111,7 +1111,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => toggleTheme(addToast)}
-                    className={`px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem] ${
+                    className={`px-2 md:px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1 md:gap-1.5 shadow-sm text-[0.6rem] ${
                       theme === 'as400'
                         ? 'bg-emerald-500 text-black border-emerald-400 font-black'
                         : 'bg-white/5 border-purple-500/30 text-purple-300 hover:bg-purple-500/20'
@@ -1119,23 +1119,23 @@ export default function App() {
                     title="Alternar Tema: IBM AS/400 5250 (Fósforo Verde) vs Torre Obsidian (Alt+T)"
                   >
                     <Terminal size={11} className={theme === 'as400' ? 'text-black' : 'text-purple-400'} />
-                    <span>{theme === 'as400' ? 'IBM AS/400' : 'TEMA AS/400'}</span>
+                    <span className="hidden md:inline">{theme === 'as400' ? 'IBM AS/400' : 'TEMA AS/400'}</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setShowHelpModal(true)}
-                    className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/60 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem]"
+                    className="px-2 md:px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/60 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1 md:gap-1.5 shadow-sm text-[0.6rem]"
                     title="Central de Ajuda, Atalhos do Coletor e Documentação"
                   >
                     <HelpCircle size={11} className="text-emerald-400" />
-                    <span>Ajuda</span>
+                    <span className="hidden md:inline">Ajuda</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => updateScreensaverEnabled(!screensaverEnabled)}
-                    className={`px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem] ${
+                    className={`px-2 md:px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1 md:gap-1.5 shadow-sm text-[0.6rem] ${
                       screensaverEnabled
                         ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
                         : 'bg-white/5 border-white/15 text-slate-400 hover:text-white'
@@ -1143,42 +1143,44 @@ export default function App() {
                     title={screensaverEnabled ? 'Descanso de Tela ATIVADO (Clique para desligar)' : 'Descanso de Tela DESLIGADO (Clique para ligar)'}
                   >
                     <Moon size={11} className={screensaverEnabled ? 'text-purple-400' : 'text-slate-400'} />
-                    <span>Descanso: {screensaverEnabled ? 'LIGADO' : 'OFF'}</span>
+                    <span className="hidden md:inline">Descanso: {screensaverEnabled ? 'LIGADO' : 'OFF'}</span>
                   </button>
 
                   <button
                     onClick={handleRestoreSystem}
                     disabled={isSyncing}
-                    className="px-2.5 py-1 bg-white/5 border border-white/15 text-slate-200 hover:text-emerald-400 hover:border-emerald-500/40 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1.5 shadow-sm"
+                    className="px-2 md:px-2.5 py-1 bg-white/5 border border-white/15 text-slate-200 hover:text-emerald-400 hover:border-emerald-500/40 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1 md:gap-1.5 shadow-sm"
                     title="Restaura o sistema, diagnostica base de dados e reconecta sincronização"
                   >
                     <RefreshCw size={11} className={isSyncing ? 'animate-spin text-emerald-400' : ''} />
-                    <span>Restaurar Sistema</span>
+                    <span className="hidden md:inline">Restaurar Sistema</span>
                   </button>
 
                   {user ? (
-                    <>
-                      <span className="text-slate-400">OPERADOR: <strong className="text-white uppercase">{user.user_metadata?.full_name || user.email}</strong></span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-400 text-[0.55rem] md:text-xs">
+                        <span className="hidden md:inline">OPERADOR: </span><strong className="text-white uppercase">{user.user_metadata?.full_name || user.email?.split('@')[0]}</strong>
+                      </span>
                       <button
                         onClick={() => {
                           localStorage.removeItem('repro_local_user');
                           setUser(null);
                           addToast("Sessão terminada.", 'var(--color-info)');
                         }}
-                        className="px-2 py-1 bg-white/5 border border-white/10 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 rounded-lg cursor-pointer transition-all"
+                        className="px-2 py-1 bg-white/5 border border-white/10 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 rounded-lg cursor-pointer transition-all text-xs"
                       >
                         SAIR
                       </button>
-                    </>
+                    </div>
                   ) : (
                     <button
                       onClick={() => {
                         setIsGuestMode(false);
                         localStorage.setItem('repro_guest_mode', 'false');
                       }}
-                      className="px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-black rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold"
+                      className="px-2 md:px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-black rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold text-[0.6rem] md:text-xs"
                     >
-                      FAZER LOGIN ⚡
+                      LOGIN ⚡
                     </button>
                   )}
                 </div>
