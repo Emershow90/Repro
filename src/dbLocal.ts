@@ -18,9 +18,10 @@ export function initDb(): Promise<IDBDatabase> {
   if (initPromise) return initPromise;
 
   initPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    try {
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-    request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
+      request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
       const db = (event.target as IDBOpenDBRequest).result;
       
       let logsStore: IDBObjectStore;
@@ -66,6 +67,10 @@ export function initDb(): Promise<IDBDatabase> {
       telemetry.error('IndexedDB', 'Erro ao abrir banco de dados local', err);
       reject(err);
     };
+    } catch (err) {
+      telemetry.error('IndexedDB', 'Erro fatal síncrono ao abrir DB', err);
+      reject(err);
+    }
   });
 
   return initPromise;
