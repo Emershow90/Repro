@@ -18,6 +18,7 @@ import {
 import { syncOfflineQueue, fetchFromCloud, postLogWithRetry } from './sheetService';
 
 import { getWeekNumber, getDayOfWeekName, formatDateToBR, parseDateString } from './utils/dateUtils';
+import { pdtAudio } from './utils/pdtAudio';
 import { EventBus } from './eventBus';
 import { useSectorStore } from './stores/sectorStore';
 import { useCollaboratorStore } from './stores/collaboratorStore';
@@ -40,6 +41,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import Screensaver from './components/Screensaver';
 import HelpSupportModal from './components/HelpSupportModal';
 import TabBarBead from './components/TabBarBead';
+import FormModalFloatingButton from './components/FormModalFloatingButton';
 import { 
   deduplicateLogs, 
   isLogMatchingSector, 
@@ -168,6 +170,41 @@ export default function App() {
   const [panelSubTab, setPanelSubTab] = useState<'repro' | 'ruas'>('repro');
   const [inputOpen, setInputOpen] = useState(false);
   const [ticks, setTicks] = useState(0);
+
+  // Contagem regressiva para Backup Automático do IndexedDB (Padrão: 5 minutos = 300 segundos)
+  const AUTO_BACKUP_INTERVAL_SECS = 300;
+  const [backupCountdown, setBackupCountdown] = useState<number>(AUTO_BACKUP_INTERVAL_SECS);
+  const [isDbBackingUp, setIsDbBackingUp] = useState<boolean>(false);
+
+  // Executa o Backup no IndexedDB
+  const handleTriggerIndexedDbBackup = useCallback(async (isAuto = false) => {
+    if (!dbReady || isDbBackingUp) return;
+    setIsDbBackingUp(true);
+    try {
+      const currentLogs = await getLogs();
+      const backupPayload = {
+        timestamp: Date.now(),
+        dateStr: new Date().toISOString(),
+        totalLogs: currentLogs.length,
+        logs: currentLogs
+      };
+      await saveState('indexeddb_auto_backup_snapshot', backupPayload);
+      await saveState('indexeddb_last_backup_ts', Date.now());
+      
+      pdtAudio.playSuccessChime();
+      addToast(
+        isAuto 
+          ? `✓ Backup automático do IndexedDB realizado (${currentLogs.length} registros).` 
+          : `✓ Backup manual do IndexedDB realizado com sucesso (${currentLogs.length} registros).`, 
+        'var(--color-success)'
+      );
+      setBackupCountdown(AUTO_BACKUP_INTERVAL_SECS);
+    } catch (err) {
+      addToast('Erro ao gravar snapshot de backup no IndexedDB.', 'var(--color-danger)');
+    } finally {
+      setIsDbBackingUp(false);
+    }
+  }, [dbReady, isDbBackingUp, addToast]);
 
   // Detecção de Modo Standalone / Iframe / TV para visualização externa
   const isStandaloneMode = useMemo(() => {
@@ -349,13 +386,29 @@ export default function App() {
     });
   }, []);
 
-  // Timer interval to increment elapsed seconds
+  // Timer interval to increment elapsed seconds & Auto-Backup Countdown
   useEffect(() => {
     const timer = setInterval(() => {
       setTicks(t => t + 1);
+      setBackupCountdown(prev => (prev <= 1 ? AUTO_BACKUP_INTERVAL_SECS : prev - 1));
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  const lastBackupTickRef = useRef<number>(0);
+  const lastWarningTickRef = useRef<number>(0);
+
+  // Handle countdown triggers (10s warning and automated execution)
+  useEffect(() => {
+    if (backupCountdown === 10 && lastWarningTickRef.current !== ticks) {
+      lastWarningTickRef.current = ticks;
+      addToast("💾 Próximo backup automático do IndexedDB em 10 segundos...", 'var(--color-info)');
+      pdtAudio.playAttentionReminder();
+    } else if (backupCountdown === AUTO_BACKUP_INTERVAL_SECS && ticks > 1 && lastBackupTickRef.current !== ticks) {
+      lastBackupTickRef.current = ticks;
+      handleTriggerIndexedDbBackup(true);
+    }
+  }, [backupCountdown, ticks, addToast, handleTriggerIndexedDbBackup]);
 
   // Update seconds based on high precision math reference, auto-saving every 5 seconds
   useEffect(() => {
@@ -1106,8 +1159,28 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Ações de Restauração & Sessão */}
+                {/* Ações de Restauração, Auto-Backup & Sessão */}
                 <div className="flex flex-wrap items-center gap-2 mt-1 justify-start md:justify-end">
+                  {/* Cronômetro de Contagem Regressiva para Backup Automático do IndexedDB */}
+                  <button
+                    type="button"
+                    onClick={() => handleTriggerIndexedDbBackup(false)}
+                    disabled={isDbBackingUp}
+                    className={`px-2 md:px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-mono font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem] ${
+                      backupCountdown <= 10
+                        ? 'bg-amber-500/25 border-amber-400 text-amber-200 animate-pulse ring-2 ring-amber-400/40'
+                        : 'bg-white/5 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20'
+                    }`}
+                    title="Contagem regressiva para o próximo backup automático do IndexedDB. Clique para fazer backup agora."
+                  >
+                    <Database size={11} className={backupCountdown <= 10 ? 'text-amber-400 animate-bounce' : 'text-emerald-400'} />
+                    <span>
+                      {isDbBackingUp 
+                        ? 'GRAVANDO...' 
+                        : `BACKUP DB: ${Math.floor(backupCountdown / 60)}:${(backupCountdown % 60).toString().padStart(2, '0')}`}
+                    </span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => toggleTheme(addToast)}
@@ -1540,6 +1613,9 @@ export default function App() {
         onClose={() => setShowHelpModal(false)}
         apiUrl={apiUrl}
       />
+
+      {/* SOLICITAÇÃO DE PEDIDO - FLOATING BUTTON */}
+      <FormModalFloatingButton />
     </div>
   );
 }

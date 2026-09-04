@@ -33,6 +33,8 @@ body {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.12) var(--color-terminal-bg);
   position: relative;
+  padding-top: 26px;
+  padding-bottom: 49px;
 }
 
 /* Organic Cards & Glassmorphism with Depth */

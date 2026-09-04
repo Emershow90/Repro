@@ -40,12 +40,12 @@ export default function FormModalFloatingButton({
       <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 group">
         <div className="hidden sm:flex items-center gap-1.5 bg-terminal-bg/90 backdrop-blur border border-terminal-accent/40 text-terminal-accent px-3 py-1.5 rounded-full text-xs font-mono font-bold shadow-lg shadow-black/50 opacity-0 group-hover:opacity-100 transition-all duration-200 pointer-events-none transform translate-x-2 group-hover:translate-x-0">
           <Sparkles size={13} className="animate-pulse" />
-          <span>Formulário Google</span>
+          <span>Solicitação de Pedido</span>
         </div>
 
         <button
           onClick={handleOpen}
-          aria-label="Abrir Formulário Google"
+          aria-label="Abrir Solicitação de Pedido"
           className="relative flex items-center justify-center w-13 h-13 rounded-full bg-terminal-accent text-terminal-bg shadow-xl shadow-terminal-accent/20 hover:scale-110 active:scale-95 transition-all duration-200 cursor-pointer group border-2 border-white/20"
         >
           <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-terminal-accent rounded-full animate-ping opacity-75" />
@@ -68,7 +68,7 @@ export default function FormModalFloatingButton({
                 </div>
                 <div>
                   <h3 className="text-xs sm:text-sm font-bold text-white tracking-widest uppercase font-mono flex items-center gap-2">
-                    <span>Formulário Google</span>
+                    <span>Solicitação de Pedido</span>
                     <span className="text-[0.6rem] px-2 py-0.5 bg-terminal-accent/20 text-terminal-accent border border-terminal-accent/30 rounded-full">
                       Online
                     </span>
@@ -178,7 +178,7 @@ export default function FormModalFloatingButton({
               {/* IFRAME FORM */}
               <iframe
                 src={embedUrl}
-                title="Formulário Google"
+                title="Formulário de Solicitação de Pedido"
                 className="w-full h-full border-0 rounded-b-lg bg-white"
                 onLoad={handleIframeLoad}
                 onError={handleIframeError}
@@ -189,7 +189,7 @@ export default function FormModalFloatingButton({
             <div className="px-5 py-2.5 bg-terminal-bg/90 border-t border-terminal-border/40 flex flex-col sm:flex-row items-center justify-between gap-2 text-[0.65rem] font-mono text-terminal-text opacity-70">
               <span className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-terminal-accent animate-pulse" />
-                <span>Formulário Google Integrado</span>
+                <span>Formulário de Solicitação de Pedido</span>
               </span>
 
               <div className="flex items-center gap-3">

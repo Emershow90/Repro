@@ -770,9 +770,9 @@ export async function fetchFromCloud(apiUrl: string, userUid?: string): Promise<
   if (userUid) {
     try {
       const cloudLogs = await fetchLogsDirectly(userUid);
-      return cloudLogs;
+      if (cloudLogs && cloudLogs.length > 0) return cloudLogs;
     } catch (err: any) {
-      console.error('Failed to fetch logs from Supabase:', err);
+      console.warn('Supabase fallback fetch did not return logs:', err?.message || err);
     }
   }
 

@@ -5,13 +5,14 @@
 
 import React, { useRef } from "react";
 import { motion } from "motion/react";
+import { useDrag } from '@use-gesture/react';
 
 /**
  * TabBarBead
  * ----------
  * Barra de navegação entre módulos.
  * Para PC/Web (md+): Usa o modelo de "conta" (bead) que desliza e se funde na aba ativa.
- * Para Mobile: Lista horizontal scrollável ergonomicamente ajustada.
+ * Para Mobile: Lista horizontal scrollável ergonomicamente ajustada com @use-gesture.
  */
 
 export type Tab = {
@@ -28,15 +29,28 @@ type Props = {
 };
 
 export default function TabBarBead({ tabs, activeId, onChange }: Props) {
-  const barRef = useRef<HTMLDivElement>(null);
+  const pcBarRef = useRef<HTMLDivElement>(null);
+  const mobileBarRef = useRef<HTMLDivElement>(null);
   const activeIndex = Math.max(0, tabs.findIndex((t) => t.id === activeId));
+
+  const bindMobile = useDrag(({ delta: [dx] }) => {
+    if (mobileBarRef.current) {
+      mobileBarRef.current.scrollLeft -= dx;
+    }
+  }, {
+    axis: 'x',
+    filterTaps: true,
+  });
 
   return (
     <>
       {/* 1. MODO MOBILE: Scroll Horizontal, sem Bead (Evita botões esmagados) */}
       <div
+        {...bindMobile()}
+        ref={mobileBarRef}
         id="main-app-navigation-mobile"
-        className="md:hidden flex items-center gap-2 overflow-x-auto snap-x px-1 py-2 no-scrollbar w-full"
+        className="md:hidden flex items-center gap-2 overflow-x-auto snap-x px-1 py-2 no-scrollbar w-full touch-pan-x will-change-scroll"
+        style={{ touchAction: 'pan-x' }}
       >
         {tabs.map((tab) => {
           const isActive = tab.id === activeId;
@@ -45,7 +59,7 @@ export default function TabBarBead({ tabs, activeId, onChange }: Props) {
               key={tab.id}
               type="button"
               onClick={() => onChange(tab.id)}
-              className={`snap-start shrink-0 flex items-center gap-2 h-10 px-4 rounded-full transition-all border shadow-sm ${
+              className={`snap-start shrink-0 flex items-center gap-2 h-10 px-4 rounded-full transition-all border shadow-sm will-change-transform ${
                 isActive 
                   ? 'bg-emerald-500 text-black border-emerald-400 font-black'
                   : 'bg-slate-900/80 text-slate-400 border-white/10 hover:text-white'
@@ -73,7 +87,7 @@ export default function TabBarBead({ tabs, activeId, onChange }: Props) {
 
       {/* 2. MODO PC/WEB: Flex com Bead Animado (Corrigido) */}
       <div
-        ref={barRef}
+        ref={pcBarRef}
         id="main-app-navigation"
         className="torre-mono relative hidden md:flex select-none items-center rounded-full p-1.5 w-full max-w-full xl:max-w-6xl mx-auto backdrop-blur-md overflow-x-auto no-scrollbar gap-1"
         style={{

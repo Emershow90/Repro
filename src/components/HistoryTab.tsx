@@ -494,11 +494,13 @@ export default function HistoryTab({
       'Data': l.data,
       'Dia da Semana': l.dia,
       'Semana do Ano': l.semana,
+      'Setor': l.setor || '87',
       'Atividade': l.atividade,
       'Colaborador': l.colaborador,
       'Quantidade de Endereços': l.volumes,
       'Horas Utilizadas': parseFloat(l.horas.toFixed(2)),
-      'Produtividade (VPH)': parseFloat(l.vph)
+      'Produtividade (VPH)': parseFloat(l.vph),
+      'Tipo': l.tipo || 'direta'
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(cleanData);

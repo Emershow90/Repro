@@ -137,7 +137,7 @@ export async function fetchPerfilDirectly(uid: string) {
 export async function saveLogsDirectly(logs: Log[], userUid: string) {
   const client = getSupabase();
   if (!client) {
-    throw new Error("Supabase client is not initialized.");
+    return null;
   }
 
   const formattedLogs = logs.map(log => ({
@@ -157,14 +157,20 @@ export async function saveLogsDirectly(logs: Log[], userUid: string) {
     tipo: log.tipo
   }));
 
-  const { data, error } = await client
-    .from('logs')
-    .upsert(formattedLogs, { onConflict: 'id' });
+  try {
+    const { data, error } = await client
+      .from('logs')
+      .upsert(formattedLogs, { onConflict: 'id' });
 
-  if (error) {
-    throw error;
+    if (error) {
+      console.warn("Supabase upsert warning:", error.message);
+      return null;
+    }
+    return data;
+  } catch (err: any) {
+    console.warn("Supabase saveLogsDirectly network error:", err?.message || err);
+    return null;
   }
-  return data;
 }
 
 /**
@@ -174,31 +180,37 @@ export async function fetchLogsDirectly(userUid: string): Promise<Log[]> {
   const client = getSupabase();
   if (!client) return [];
 
-  const { data, error } = await client
-    .from('logs')
-    .select('*')
-    .eq('user_uid', userUid)
-    .order('timestamp', { ascending: false });
+  try {
+    const { data, error } = await client
+      .from('logs')
+      .select('*')
+      .eq('user_uid', userUid)
+      .order('timestamp', { ascending: false });
 
-  if (error) {
-    throw error;
+    if (error) {
+      console.warn("Supabase fetchLogsDirectly query error:", error.message);
+      return [];
+    }
+
+    return (data || []).map(item => ({
+      id: item.id,
+      data: item.data,
+      dia: item.dia,
+      semana: item.semana,
+      atividade: item.atividade,
+      colaborador: item.colaborador,
+      setor: item.setor || undefined,
+      volumes: item.volumes,
+      horas: item.horas,
+      vph: item.vph,
+      timestamp: item.timestamp,
+      synced: true,
+      tipo: item.tipo
+    }));
+  } catch (err: any) {
+    console.warn("Supabase fetchLogsDirectly network error:", err?.message || err);
+    return [];
   }
-
-  return (data || []).map(item => ({
-    id: item.id,
-    data: item.data,
-    dia: item.dia,
-    semana: item.semana,
-    atividade: item.atividade,
-    colaborador: item.colaborador,
-    setor: item.setor || undefined,
-    volumes: item.volumes,
-    horas: item.horas,
-    vph: item.vph,
-    timestamp: item.timestamp,
-    synced: true,
-    tipo: item.tipo
-  }));
 }
 
 /**
@@ -208,16 +220,22 @@ export async function deleteLogDirectly(logId: number, userUid: string) {
   const client = getSupabase();
   if (!client) return null;
 
-  const { data, error } = await client
-    .from('logs')
-    .delete()
-    .eq('id', logId)
-    .eq('user_uid', userUid);
+  try {
+    const { data, error } = await client
+      .from('logs')
+      .delete()
+      .eq('id', logId)
+      .eq('user_uid', userUid);
 
-  if (error) {
-    throw error;
+    if (error) {
+      console.warn("Supabase deleteLogDirectly error:", error.message);
+      return null;
+    }
+    return data;
+  } catch (err: any) {
+    console.warn("Supabase deleteLogDirectly network error:", err?.message || err);
+    return null;
   }
-  return data;
 }
 
 /**
@@ -227,13 +245,19 @@ export async function clearLogsDirectly(userUid: string) {
   const client = getSupabase();
   if (!client) return null;
 
-  const { data, error } = await client
-    .from('logs')
-    .delete()
-    .eq('user_uid', userUid);
+  try {
+    const { data, error } = await client
+      .from('logs')
+      .delete()
+      .eq('user_uid', userUid);
 
-  if (error) {
-    throw error;
+    if (error) {
+      console.warn("Supabase clearLogsDirectly error:", error.message);
+      return null;
+    }
+    return data;
+  } catch (err: any) {
+    console.warn("Supabase clearLogsDirectly network error:", err?.message || err);
+    return null;
   }
-  return data;
 }

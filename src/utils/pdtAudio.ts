@@ -201,6 +201,35 @@ class PdtAudioFeedback {
   }
 
   /**
+   * Bipe de Atenção / Lembrete de Endereço (Teorema de Cox)
+   */
+  public playAttentionReminder(): void {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(523.25, now); // C5
+      osc.frequency.exponentialRampToValueAtTime(659.25, now + 0.08); // E5
+      osc.frequency.exponentialRampToValueAtTime(783.99, now + 0.16); // G5
+
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + 0.22);
+    } catch {
+      // Ignorado
+    }
+  }
+
+  /**
    * Vibração Háptica do Hardware
    */
   public triggerHaptic(durationMs: number = 45): void {

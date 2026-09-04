@@ -29,7 +29,10 @@ import {
   Sparkles,
   Flame,
   Award,
-  Calculator
+  Calculator,
+  Target,
+  Zap,
+  BellRing
 } from 'lucide-react';
 import ReproCalculatorModal from './ReproCalculatorModal';
 import { 
@@ -121,6 +124,14 @@ export default function StreetReplenishmentModule({
   const [lastLapDuration, setLastLapDuration] = useState<number | null>(null);
   const [lastLapTimestamp, setLastLapTimestamp] = useState<number | null>(null);
   const [currentAddressSeconds, setCurrentAddressSeconds] = useState<number>(0);
+
+  // Ergonomia & Meta 56 cx/h & Teorema de Cox
+  const [targetSpeedVph, setTargetSpeedVph] = useState<number>(56);
+  const [lastClickTimestamp, setLastClickTimestamp] = useState<number | null>(null);
+  const [lastClickFeedbackText, setLastClickFeedbackText] = useState<string | null>(null);
+  const [coxAnomalyDetected, setCoxAnomalyDetected] = useState<boolean>(false);
+  const [coxAnomalyProbability, setCoxAnomalyProbability] = useState<number>(0);
+  const [lastCoxPromptTimestamp, setLastCoxPromptTimestamp] = useState<number>(0);
 
   // Manual times
   const [manualStartTime, setManualStartTime] = useState('08:00');
@@ -491,25 +502,77 @@ export default function StreetReplenishmentModule({
     }
   }, []);
 
-  // Timer do Cronômetro
+  // Timer do Cronômetro & Teorema de Cox (Inferência Bayesiana em Log-Odds)
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
     if (stopwatchActive && stopwatchStartTs) {
       interval = setInterval(() => {
-        const secs = Math.floor((Date.now() - stopwatchStartTs) / 1000);
+        const now = Date.now();
+        const secs = Math.floor((now - stopwatchStartTs) / 1000);
         setStopwatchSeconds(secs);
         
+        let elapsedSinceLastAddr = secs;
         if (lastLapTimestamp) {
-          setCurrentAddressSeconds(Math.floor((Date.now() - lastLapTimestamp) / 1000));
+          elapsedSinceLastAddr = Math.floor((now - lastLapTimestamp) / 1000);
+          setCurrentAddressSeconds(elapsedSinceLastAddr);
         } else {
           setCurrentAddressSeconds(secs);
         }
+
+        // TEOREMA DE COX: Avaliação bayesiana de probabilidade de clique esquecido
+        // Se a operação está ativa, já foram feitos endereços, mas o tempo atual é > 2.5x a média por endereço
+        if (addressCount > 0 && secs > 60) {
+          const avgTimeSecs = secs / addressCount;
+          // Se a sessão está rolando e já passou mais de 2.5x a média (mínimo 90s)
+          if (elapsedSinceLastAddr > Math.max(90, avgTimeSecs * 2.2)) {
+            // Prior: 0.15 (Log-odds = ln(0.15 / 0.85) ≈ -1.734)
+            let logOdds = Math.log(0.15 / 0.85);
+
+            // Evidence 1: Excesso de tempo sem clique em relação à média
+            const timeRatio = elapsedSinceLastAddr / Math.max(30, avgTimeSecs);
+            if (timeRatio > 3.0) {
+              logOdds += 1.8; // Forte evidência
+            } else if (timeRatio > 2.2) {
+              logOdds += 1.1; // Média evidência
+            }
+
+            // Evidence 2: Ritmo anterior era consistente (alta cadência)
+            if (addressCount >= 3) {
+              logOdds += 0.5;
+            }
+
+            // Posterior probability via Sigmoid P = 1 / (1 + exp(-logOdds))
+            const prob = 1 / (1 + Math.exp(-logOdds));
+            setCoxAnomalyProbability(Number((prob * 100).toFixed(0)));
+
+            if (prob > 0.75) {
+              setCoxAnomalyDetected(true);
+              // Notifica com bipe discreto no máximo 1 vez a cada 3 minutos
+              if (now - lastCoxPromptTimestamp > 180000) {
+                pdtAudio.playAttentionReminder();
+                pdtAudio.triggerHaptic(50);
+                setLastCoxPromptTimestamp(now);
+              }
+            } else {
+              setCoxAnomalyDetected(false);
+            }
+          } else {
+            setCoxAnomalyDetected(false);
+            setCoxAnomalyProbability(0);
+          }
+        } else {
+          setCoxAnomalyDetected(false);
+          setCoxAnomalyProbability(0);
+        }
       }, 1000);
+    } else {
+      setCoxAnomalyDetected(false);
+      setCoxAnomalyProbability(0);
     }
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [stopwatchActive, stopwatchStartTs, lastLapTimestamp]);
+  }, [stopwatchActive, stopwatchStartTs, lastLapTimestamp, addressCount, lastCoxPromptTimestamp]);
 
   // Screensaver Inatividade Timer (Preserva Cronômetro em Segundo Plano)
   useEffect(() => {
@@ -670,6 +733,12 @@ export default function StreetReplenishmentModule({
     setTouchPulse(true);
     setTimeout(() => setTouchPulse(false), 200);
 
+    // Registro de Feedback Ergonômico de Confirmação Instantânea
+    setLastClickTimestamp(now);
+    setLastClickFeedbackText(`✓ Endereço #${nextAddr} registrado! (${lap > 0 ? `${lap}s` : 'agora'})`);
+    setTimeout(() => setLastClickFeedbackText(null), 3000);
+    setCoxAnomalyDetected(false);
+
     // Gamificação: Feedback efêmero de avanço
     if (isDemandLoaded && isUnitCompatible && demandValue !== null) {
       const prevTotal = historicalStreetVolumesToday + volumeCount;
@@ -678,10 +747,10 @@ export default function StreetReplenishmentModule({
         pdtAudio.playSuccessChime();
         triggerFlashFeedback('✓ DEMANDA ATENDIDA!');
       } else {
-        triggerFlashFeedback('✓ ENDEREÇO CONCLUÍDO');
+        triggerFlashFeedback(`✓ ENDEREÇO #${nextAddr} CONCLUÍDO`);
       }
     } else {
-      triggerFlashFeedback('✓ ENDEREÇO CONCLUÍDO');
+      triggerFlashFeedback(`✓ ENDEREÇO #${nextAddr} CONCLUÍDO`);
     }
   }, [
     stopwatchActive, 
@@ -1408,11 +1477,87 @@ export default function StreetReplenishmentModule({
       {/* 4. ÁREA DE OPERAÇÃO HERO & INCREMENTOS DE CAIXAS (MOBILE & PDT ERGONOMIC) */}
       <div className="p-3 rounded-xl bg-slate-950 border-2 border-emerald-500/40 shadow-xl space-y-2.5">
         
+        {/* BARRA DE VELOCÍMETRO & META 56 CX/HORA (PACER BAYESIANO) */}
+        <div className="p-2 rounded-lg bg-slate-900/90 border border-white/10 flex items-center justify-between flex-wrap gap-2 text-xs font-mono">
+          <div className="flex items-center gap-2">
+            <Target size={14} className="text-cyan-400" />
+            <span>
+              META: <strong className="text-white">{targetSpeedVph} cx/h</strong>
+            </span>
+            <span className="text-[0.62rem] text-slate-400">
+              (~{(3600 / targetSpeedVph).toFixed(0)}s/cx)
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[0.68rem] text-slate-400">RITMO AO VIVO:</span>
+            <span className={`px-2 py-0.5 rounded-full font-black text-xs flex items-center gap-1 ${
+              Number(currentVPH) >= targetSpeedVph
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50'
+                : Number(currentVPH) >= targetSpeedVph * 0.85
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50'
+                : 'bg-rose-500/20 text-rose-300 border border-rose-500/50'
+            }`}>
+              <Zap size={11} className={Number(currentVPH) >= targetSpeedVph ? 'text-emerald-400 fill-emerald-400' : ''} />
+              <span>{currentVPH} cx/h</span>
+              <span className="text-[0.6rem] opacity-80">
+                ({Number(currentVPH) >= targetSpeedVph ? `+${(Number(currentVPH) - targetSpeedVph).toFixed(0)}` : `${(Number(currentVPH) - targetSpeedVph).toFixed(0)}`})
+              </span>
+            </span>
+          </div>
+        </div>
+
+        {/* FEEDBACK DO ÚLTIMO ENDEREÇO & TEMPO TRANSCORRIDO */}
+        <div className="flex items-center justify-between px-2 py-1 bg-black/40 rounded-lg border border-white/5 text-[0.68rem] font-mono">
+          <div className="flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${
+              currentAddressSeconds < 65 
+                ? 'bg-emerald-400 animate-pulse' 
+                : currentAddressSeconds < 120 
+                ? 'bg-amber-400' 
+                : 'bg-rose-400'
+            }`} />
+            <span className="text-slate-300">
+              {addressCount === 0 
+                ? 'Nenhum endereço concluído ainda' 
+                : `Último registro (#${addressCount}): há ${currentAddressSeconds}s`}
+            </span>
+          </div>
+
+          {lastLapDuration !== null && (
+            <span className="text-slate-400">
+              Lap anterior: <strong className="text-emerald-300">{lastLapDuration}s</strong>
+            </span>
+          )}
+        </div>
+
+        {/* ALERTA DO TEOREMA DE COX: PROBABILIDADE ELEVADA DE ESQUECIMENTO DE CLIQUE */}
+        {coxAnomalyDetected && (
+          <div className="p-2.5 bg-amber-950/70 border-2 border-amber-500/80 rounded-xl flex items-center justify-between gap-2 text-amber-200 animate-pulse text-xs font-mono">
+            <div className="flex items-center gap-2">
+              <BellRing size={16} className="text-amber-400 shrink-0" />
+              <div>
+                <strong className="text-white block">Tempo sem registro ({currentAddressSeconds}s)</strong>
+                <span className="text-[0.65rem] text-amber-300/90">
+                  Probabilidade Bayesiana (Cox): {coxAnomalyProbability}% de esquecimento do clique anterior.
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleQuickAddAddress}
+              className="px-2.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-black font-black text-xs uppercase rounded-lg shadow cursor-pointer transition-all active:scale-95 shrink-0"
+            >
+              +1 Esqueci
+            </button>
+          </div>
+        )}
+
         {/* SUPER BOTÃO HERO: +1 ENDEREÇO (+1 CX) */}
         <button
           type="button"
           onClick={handleQuickAddAddress}
-          className={`w-full min-h-[72px] sm:min-h-[80px] p-2.5 rounded-xl border-2 transition-all flex flex-col items-center justify-center gap-0.5 cursor-pointer select-none shadow-xl active:scale-[0.98] ${
+          className={`w-full min-h-[76px] sm:min-h-[84px] p-2.5 rounded-xl border-2 transition-all flex flex-col items-center justify-center gap-0.5 cursor-pointer select-none shadow-xl active:scale-[0.98] ${
             touchPulse 
               ? 'bg-emerald-400 text-black border-white ring-4 ring-emerald-400/50' 
               : 'bg-emerald-500 hover:bg-emerald-400 text-black border-emerald-300 font-black'
@@ -1428,6 +1573,18 @@ export default function StreetReplenishmentModule({
             Atuais: {addressCount} endereços • {volumeCount} {unidadeRealizado === 'CAIXAS' ? 'cx' : 'vol'}
           </div>
         </button>
+
+        {/* FITA DE AUDITORIA COMPACTA DOS ÚLTIMOS EVENTOS */}
+        {eventHistory.length > 0 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-[0.6rem] font-mono text-slate-400">
+            <span className="text-slate-500 uppercase text-[0.55rem] shrink-0">Passos recentes:</span>
+            {eventHistory.slice(-4).reverse().map((ev, idx) => (
+              <span key={ev.id || idx} className="px-1.5 py-0.5 bg-white/5 border border-white/10 rounded text-slate-300 shrink-0">
+                {ev.tipo === 'ENDERECO_CONCLUIDO' ? `✓ End (+${ev.volumesDelta}cx)` : `+${ev.volumesDelta} cx`}
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* GRADE DE MÚLTIPLOS DE CAIXAS */}
         <div className="grid grid-cols-6 gap-1.5">

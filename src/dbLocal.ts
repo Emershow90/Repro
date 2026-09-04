@@ -82,31 +82,35 @@ export async function getLogs(): Promise<Log[]> {
   const db = dbInstance || await initDb();
   return telemetry.time('IndexedDB', 'getLogs', () => {
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction('logs', 'readonly');
-      const store = transaction.objectStore('logs');
-      
-      // Use index on timestamp when available for pre-sorted retrieval
-      if (store.indexNames.contains('timestamp')) {
-        const index = store.index('timestamp');
-        const req = index.openCursor(null, 'prev');
-        const results: Log[] = [];
-        req.onsuccess = () => {
-          const cursor = req.result;
-          if (cursor) {
-            results.push(cursor.value);
-            cursor.continue();
-          } else {
-            resolve(results);
-          }
-        };
-        req.onerror = () => reject(req.error);
-      } else {
-        const request = store.getAll();
-        request.onsuccess = () => {
-          const result = request.result as Log[];
-          resolve(result.sort((a, b) => b.timestamp - a.timestamp));
-        };
-        request.onerror = () => reject(request.error);
+      try {
+        const transaction = db.transaction('logs', 'readonly');
+        const store = transaction.objectStore('logs');
+        
+        // Use index on timestamp when available for pre-sorted retrieval
+        if (store.indexNames.contains('timestamp')) {
+          const index = store.index('timestamp');
+          const req = index.openCursor(null, 'prev');
+          const results: Log[] = [];
+          req.onsuccess = () => {
+            const cursor = req.result;
+            if (cursor) {
+              results.push(cursor.value);
+              cursor.continue();
+            } else {
+              resolve(results);
+            }
+          };
+          req.onerror = () => reject(req.error);
+        } else {
+          const request = store.getAll();
+          request.onsuccess = () => {
+            const result = request.result as Log[];
+            resolve(result.sort((a, b) => b.timestamp - a.timestamp));
+          };
+          request.onerror = () => reject(request.error);
+        }
+      } catch (err) {
+        reject(err);
       }
     });
   });
@@ -175,11 +179,15 @@ export async function getLogsByDate(data: string): Promise<Log[]> {
 export async function saveLog(log: Log): Promise<boolean> {
   const db = dbInstance || await initDb();
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction('logs', 'readwrite');
-    const store = transaction.objectStore('logs');
-    store.put(log);
-    transaction.oncomplete = () => resolve(true);
-    transaction.onerror = () => reject(transaction.error);
+    try {
+      const transaction = db.transaction('logs', 'readwrite');
+      const store = transaction.objectStore('logs');
+      store.put(log);
+      transaction.oncomplete = () => resolve(true);
+      transaction.onerror = () => reject(transaction.error);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
@@ -191,15 +199,18 @@ export async function saveLogsBulk(logs: Log[]): Promise<boolean> {
   const db = dbInstance || await initDb();
   return telemetry.time('IndexedDB', `saveLogsBulk (${logs.length} itens)`, () => {
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction('logs', 'readwrite');
-      const store = transaction.objectStore('logs');
-      
-      for (let i = 0; i < logs.length; i++) {
-        store.put(logs[i]);
+      try {
+        const transaction = db.transaction('logs', 'readwrite');
+        const store = transaction.objectStore('logs');
+        
+        for (let i = 0; i < logs.length; i++) {
+          store.put(logs[i]);
+        }
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = () => reject(transaction.error);
+      } catch (err) {
+        reject(err);
       }
-
-      transaction.oncomplete = () => resolve(true);
-      transaction.onerror = () => reject(transaction.error);
     });
   });
 }
@@ -207,57 +218,73 @@ export async function saveLogsBulk(logs: Log[]): Promise<boolean> {
 export async function deleteLog(id: number): Promise<boolean> {
   const db = dbInstance || await initDb();
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction('logs', 'readwrite');
-    const store = transaction.objectStore('logs');
-    store.delete(id);
-    transaction.oncomplete = () => resolve(true);
-    transaction.onerror = () => reject(transaction.error);
+    try {
+      const transaction = db.transaction('logs', 'readwrite');
+      const store = transaction.objectStore('logs');
+      store.delete(id);
+      transaction.oncomplete = () => resolve(true);
+      transaction.onerror = () => reject(transaction.error);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
 export async function saveState<T = any>(key: string, data: T): Promise<boolean> {
   const db = dbInstance || await initDb();
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction('state', 'readwrite');
-    const store = transaction.objectStore('state');
-    store.put({ key, data });
-    transaction.oncomplete = () => resolve(true);
-    transaction.onerror = () => reject(transaction.error);
+    try {
+      const transaction = db.transaction('state', 'readwrite');
+      const store = transaction.objectStore('state');
+      store.put({ key, data });
+      transaction.oncomplete = () => resolve(true);
+      transaction.onerror = () => reject(transaction.error);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
 export async function getState<T = any>(key: string): Promise<T | null> {
   const db = dbInstance || await initDb();
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction('state', 'readonly');
-    const store = transaction.objectStore('state');
-    const request = store.get(key);
-    request.onsuccess = () => {
-      if (request.result) {
-        resolve(request.result.data as T);
-      } else {
-        resolve(null);
-      }
-    };
-    request.onerror = () => reject(request.error);
+    try {
+      const transaction = db.transaction('state', 'readonly');
+      const store = transaction.objectStore('state');
+      const request = store.get(key);
+      request.onsuccess = () => {
+        if (request.result) {
+          resolve(request.result.data as T);
+        } else {
+          resolve(null);
+        }
+      };
+      request.onerror = () => reject(request.error);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
 export async function clearLogsAndState(): Promise<boolean> {
   const db = dbInstance || await initDb();
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(['logs', 'state'], 'readwrite');
-    const logsStore = transaction.objectStore('logs');
-    const stateStore = transaction.objectStore('state');
+    try {
+      const transaction = db.transaction(['logs', 'state'], 'readwrite');
+      const logsStore = transaction.objectStore('logs');
+      const stateStore = transaction.objectStore('state');
 
-    logsStore.clear();
-    stateStore.clear();
+      logsStore.clear();
+      stateStore.clear();
 
-    transaction.oncomplete = () => {
-      telemetry.warn('IndexedDB', 'Banco de dados local limpo com sucesso.');
-      resolve(true);
-    };
-    transaction.onerror = () => reject(transaction.error);
+      transaction.oncomplete = () => {
+        telemetry.warn('IndexedDB', 'Banco de dados local limpo com sucesso.');
+        resolve(true);
+      };
+      transaction.onerror = () => reject(transaction.error);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
