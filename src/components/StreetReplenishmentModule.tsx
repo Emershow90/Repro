@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Log, ReproDemand, ActiveSession, OperationalEvent } from '../types';
+import { Log, ReproDemand, ActiveSession, OperationalEvent, OfflineReplenishmentRecord } from '../types';
 import { 
   MapPin, 
   Clock, 
@@ -32,9 +32,11 @@ import {
   Calculator,
   Target,
   Zap,
-  BellRing
+  BellRing,
+  ScanLine
 } from 'lucide-react';
 import ReproCalculatorModal from './ReproCalculatorModal';
+import OfflineReplenishmentAssistant from './OfflineReplenishmentAssistant';
 import { 
   calculateDurationFromTimes, 
   formatDateToBR, 
@@ -175,6 +177,9 @@ export default function StreetReplenishmentModule({
   const [showCalculatorModal, setShowCalculatorModal] = useState(false);
   const [inputDemandValue, setInputDemandValue] = useState<string>('');
   const [inputDemandUnit, setInputDemandUnit] = useState<'CAIXAS' | 'VOLUMES'>('CAIXAS');
+
+  // Modo de Apontamento: 'rapido' (Contador +1 / Teclado) ou 'sequencial' (Fluxo Guiado Conectado em Sincronia)
+  const [replenishmentInputMode, setReplenishmentInputMode] = useState<'rapido' | 'sequencial'>('rapido');
 
   // Referência para sessionId persistente
   const sessionIdRef = useRef<string>(`sess_${Date.now()}`);
@@ -771,6 +776,108 @@ export default function StreetReplenishmentModule({
     isUnitCompatible, 
     demandValue, 
     persistState
+  ]);
+
+  // CALLBACK PARA O MODO SEQUENCIAL GUIADO (CONECTADO E EM SINCRONIA COM REABASTECIMENTO)
+  const handleSequentialReplenishmentConfirmed = useCallback((record: OfflineReplenishmentRecord) => {
+    const now = Date.now();
+
+    // Auto-inicia cronômetro se estiver em modo cronômetro e parado
+    let nextStartTs = stopwatchStartTs;
+    let nextSwActive = stopwatchActive;
+    if (!stopwatchActive && timeMode === 'cronometro') {
+      nextStartTs = now - stopwatchSeconds * 1000;
+      setStopwatchStartTs(nextStartTs);
+      setStopwatchActive(true);
+      nextSwActive = true;
+    }
+
+    // Calcula lap time
+    let lap = stopwatchSeconds;
+    if (lastLapTimestamp) {
+      lap = Math.floor((now - lastLapTimestamp) / 1000);
+      setLastLapDuration(lap);
+    } else if (stopwatchSeconds > 0) {
+      setLastLapDuration(stopwatchSeconds);
+    }
+    setLastLapTimestamp(now);
+    setCurrentAddressSeconds(0);
+
+    const deltaAddr = 1;
+    const deltaVol = record.quantidade > 0 ? record.quantidade : 1;
+
+    const nextAddr = addressCount + deltaAddr;
+    const nextVol = volumeCount + deltaVol;
+
+    const event: OperationalEvent = {
+      id: `evt_seq_${Date.now()}`,
+      timestamp: now,
+      tipo: 'ENDERECO_CONCLUIDO',
+      sessionId: sessionIdRef.current,
+      setor: inferredSector,
+      rua: effectiveStreet,
+      enderecosDelta: deltaAddr,
+      volumesDelta: deltaVol,
+      lapDurationSeconds: lap,
+      justification: `Fluxo Sequencial: End ${record.endereco} | Art ${record.artigo} | Cont ${record.contenant} (${deltaVol} un)`,
+      previousState: {
+        enderecos: addressCount,
+        volumes: volumeCount,
+        realizado: historicalStreetVolumesToday + volumeCount
+      }
+    };
+
+    const updatedEvents = [...eventHistory, event];
+
+    // Atualiza estados ao vivo da rua
+    setAddressCount(nextAddr);
+    setVolumeCount(nextVol);
+    setEventHistory(updatedEvents);
+
+    // Persistência imediata no IndexedDB da sessão ativa
+    persistState(
+      nextAddr,
+      nextVol,
+      nextSwActive,
+      stopwatchSeconds,
+      nextStartTs,
+      updatedEvents,
+      effectiveStreet,
+      operationDate,
+      unidadeRealizado,
+      defaultVolPerAddress
+    );
+
+    // Feedback visual e acústico
+    pdtAudio.playSuccessChime();
+    pdtAudio.triggerHaptic(50);
+    setTouchPulse(true);
+    setTimeout(() => setTouchPulse(false), 200);
+
+    setLastClickTimestamp(now);
+    setLastClickFeedbackText(`✓ ${record.endereco} (${deltaVol} un) sincronizado!`);
+    setTimeout(() => setLastClickFeedbackText(null), 3000);
+    setCoxAnomalyDetected(false);
+
+    triggerFlashFeedback(`✓ END ${record.endereco} (+${deltaVol})`);
+    onAddToast(`✓ ${record.endereco} sincronizado: +1 end e +${deltaVol} un na Rua ${effectiveStreet}!`, 'var(--color-success)');
+  }, [
+    stopwatchActive,
+    timeMode,
+    stopwatchSeconds,
+    stopwatchStartTs,
+    lastLapTimestamp,
+    addressCount,
+    volumeCount,
+    inferredSector,
+    effectiveStreet,
+    historicalStreetVolumesToday,
+    eventHistory,
+    persistState,
+    operationDate,
+    unidadeRealizado,
+    defaultVolPerAddress,
+    onAddToast
   ]);
 
   // DESFAZER ATÔMICO COM RESTAURAÇÃO DE AUDITORIA
@@ -1477,7 +1584,58 @@ export default function StreetReplenishmentModule({
       {/* 4. ÁREA DE OPERAÇÃO HERO & INCREMENTOS DE CAIXAS (MOBILE & PDT ERGONOMIC) */}
       <div className="p-3 rounded-xl bg-slate-950 border-2 border-emerald-500/40 shadow-xl space-y-2.5">
         
-        {/* BARRA DE VELOCÍMETRO & META 56 CX/HORA (PACER BAYESIANO) */}
+        {/* SELETOR DE MODO DE APONTAMENTO: CONTADOR RÁPIDO vs FLUXO SEQUENCIAL GUIADO */}
+        <div className="flex items-center gap-2 p-1 bg-slate-900/90 rounded-xl border border-white/10 font-mono">
+          <button
+            type="button"
+            onClick={() => {
+              setReplenishmentInputMode('rapido');
+              pdtAudio.playClickBeep();
+            }}
+            className={`flex-1 py-2 px-3 rounded-lg text-xs font-black uppercase flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              replenishmentInputMode === 'rapido'
+                ? 'bg-emerald-500 text-black shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Zap size={14} className={replenishmentInputMode === 'rapido' ? 'text-black' : 'text-emerald-400'} />
+            <span>Contador Rápido (+1 / Teclado)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setReplenishmentInputMode('sequencial');
+              pdtAudio.playClickBeep();
+            }}
+            className={`flex-1 py-2 px-3 rounded-lg text-xs font-black uppercase flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              replenishmentInputMode === 'sequencial'
+                ? 'bg-emerald-500 text-black shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <ScanLine size={14} className={replenishmentInputMode === 'sequencial' ? 'text-black' : 'text-emerald-400'} />
+            <span>Fluxo Sequencial Guiado</span>
+            <span className="text-[0.6rem] px-1.5 py-0.5 rounded-full bg-black/20 text-black font-bold uppercase">
+              Sincronizado
+            </span>
+          </button>
+        </div>
+
+        {replenishmentInputMode === 'sequencial' ? (
+          <div className="pt-1 animate-fade-in">
+            <OfflineReplenishmentAssistant
+              activeOperator={activeOperator}
+              activeSectorId={inferredSector}
+              currentStreet={effectiveStreet}
+              isEmbeddedInStreet={true}
+              onSequentialConfirmed={handleSequentialReplenishmentConfirmed}
+              onAddToast={onAddToast}
+            />
+          </div>
+        ) : (
+          <>
+            {/* BARRA DE VELOCÍMETRO & META 56 CX/HORA (PACER BAYESIANO) */}
         <div className="p-2 rounded-lg bg-slate-900/90 border border-white/10 flex items-center justify-between flex-wrap gap-2 text-xs font-mono">
           <div className="flex items-center gap-2">
             <Target size={14} className="text-cyan-400" />
@@ -1640,6 +1798,8 @@ export default function StreetReplenishmentModule({
             <span>+Qtd Exata</span>
           </button>
         </div>
+          </>
+        )}
 
       </div>
 

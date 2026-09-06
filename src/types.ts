@@ -148,4 +148,89 @@ export interface AppTimerState {
   rascunhoVol: string;
 }
 
+// Chaves de Armazenamento Local Compartilhadas
+export const STORAGE_ACTIVE_SESSION_KEY = 'repro_active_session_organism_v5';
+export const STORAGE_EVENTS_KEY = 'repro_operational_events_v5';
+export const STORAGE_OFFLINE_QUEUE_KEY = 'repro_offline_replenishment_queue_v1';
+
+// -------------------------------------------------------------
+// POc REABASTECIMENTO OFFLINE GUIADO & AUDITORIA AS/400
+// -------------------------------------------------------------
+
+export type ReplenishmentStep = 'ENDERECO' | 'CONTENANT' | 'ARTIGO' | 'QUANTIDADE' | 'CONFIRMACAO';
+
+export interface CatalogArticlePackaging {
+  artigo: string;
+  descricao: string;
+  embalagemPadrao: string; // ex: 'CX-12', 'CX-24', 'FD-6', 'PLT-60'
+  qtdPadrao: number; // unidades por caixa / contenant
+  qtdMinima: number;
+  qtdMaxima: number;
+  isPallet: boolean;
+  caixasPorPallet?: number;
+  setorSugerido?: string;
+  ruaSugerida?: string;
+}
+
+export interface OfflineReplenishmentRecord {
+  id: string;
+  timestamp: number;
+  data: string; // YYYY-MM-DD
+  hora: string; // HH:mm:ss
+  operador: string;
+  setor: string;
+  endereco: string;
+  contenant: string;
+  artigo: string;
+  quantidade: number;
+  quantidadeEsperada?: number;
+  divergencia: boolean;
+  tipoDivergencia?: 'QUANTIDADE_ACIMA' | 'QUANTIDADE_ABAIXO' | 'PALLET_DESMEMBRADO' | 'ARTIGO_NAO_CATALOGADO' | 'NENHUMA';
+  desmembramento?: {
+    isPallet: boolean;
+    palletOriginalQtd: number;
+    caixasAbertas: number;
+    unidadesPorCaixa: number;
+    quantidadeCalculada: number;
+    divergenciaPallet: number;
+    checklistConcluido: boolean;
+  };
+  observacao?: string;
+  synced: boolean;
+  syncedAt?: number;
+}
+
+export interface As400ConnectionConfig {
+  host: string;
+  port: number;
+  schema: string;
+  usuario: string;
+  senha?: string;
+  useSsl?: boolean;
+  timeoutMs?: number;
+  lastTested?: number;
+  lastStatus?: 'ONLINE' | 'OFFLINE' | 'ERRO';
+  lastLatencyMs?: number;
+  lastError?: string;
+  autoSyncIntervalMinutes?: number;
+}
+
+export interface As400AuditComparisonRow {
+  id: string;
+  artigo: string;
+  designacao: string;
+  setor: string;
+  rua: string;
+  endereco: string;
+  contenant?: string;
+  qtdAs400Stock: number;
+  qtdAs400Picking: number;
+  qtdAs400Demanda: number;
+  qtdFisicaContada: number;
+  divergencia: number;
+  statusAuditoria: 'OK_CONFERE' | 'DIVERGENCIA_SOBRA' | 'DIVERGENCIA_FALTA' | 'NAO_CONFERIDO';
+  ultimaLeituraTs?: number;
+  operador?: string;
+}
+
 

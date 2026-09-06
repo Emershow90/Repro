@@ -37,6 +37,8 @@ import HistoryTab from './components/HistoryTab';
 import WeeklyFollowupTab from './components/WeeklyFollowupTab';
 import StreetReplenishmentModule from './components/StreetReplenishmentModule';
 import ManagementModule from './components/ManagementModule';
+import OfflineReplenishmentAssistant from './components/OfflineReplenishmentAssistant';
+import ReabastecimentoGuiado from './components/ReabastecimentoGuiado';
 import ErrorBoundary from './components/ErrorBoundary';
 import Screensaver from './components/Screensaver';
 import HelpSupportModal from './components/HelpSupportModal';
@@ -67,7 +69,8 @@ import {
   FileSpreadsheet,
   Cpu,
   Moon,
-  ExternalLink
+  ExternalLink,
+  ScanLine
 } from 'lucide-react';
 
 const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
@@ -904,6 +907,12 @@ export default function App() {
       badge: 'Livre'
     },
     {
+      id: 'apoio',
+      label: 'Apoio Reabastecimento',
+      icon: <ScanLine size={15} className={activeTab === 'apoio' ? 'text-black' : 'text-emerald-400'} />,
+      badge: 'PoC Offline'
+    },
+    {
       id: 'gestao',
       label: 'Gestão & Sheets',
       icon: <Layers size={15} className={activeTab === 'gestao' ? 'text-black' : 'text-emerald-400'} />,
@@ -1413,6 +1422,28 @@ export default function App() {
                 onSaveLog={handleSaveStreetLog}
                 onAddToast={addToast}
               />
+            </ErrorBoundary>
+          </div>
+        )}
+
+        {/* ABA: APOIO OFFLINE AO REABASTECIMENTO (PROVA DE CONCEITO - PDT / COLETOR) */}
+        {activeTab === 'apoio' && (
+          <div className="animate-fade-in">
+            <ErrorBoundary fallbackTitle="Módulo de Apoio Offline ao Reabastecimento">
+              <OfflineReplenishmentAssistant
+                activeOperator={activeOperator}
+                activeSectorId={activeSectorId}
+                onAddToast={addToast}
+              />
+            </ErrorBoundary>
+          </div>
+        )}
+
+        {/* ABA: REABASTECIMENTO GUIADO OFFLINE (FASE A1) */}
+        {activeTab === 'guiado' && (
+          <div className="animate-fade-in">
+            <ErrorBoundary fallbackTitle="Módulo de Reabastecimento Guiado Offline">
+              <ReabastecimentoGuiado />
             </ErrorBoundary>
           </div>
         )}

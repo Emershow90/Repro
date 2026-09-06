@@ -1,190 +1,71 @@
-# Terminal REPRO v5.0 // Manual de Documentação do Sistema
+# Terminal REPRO v5.0 📦
 
-O **Terminal REPRO v5.0** é uma consola de alta performance de nível industrial concebida para a monitorização de produtividade, registo de tempos (cronometragem de atividades diretas e indiretas) e cálculo de **VPH (Volumes por Hora)** no setor da intralogística e operações de armazém.
+O **Terminal REPRO** é uma aplicação web progressiva (PWA) de classe industrial, projetada com a arquitetura **Offline-First**. Seu objetivo é operar em coletores de dados (PDTs, como Zebra MC3000/MC3300) no chão de fábrica, garantindo o fluxo contínuo de Reabastecimento e Auditoria de Estoque, mesmo em áreas com sombra de conectividade (Wi-Fi/4G).
 
-Este sistema foi arquitetado com base no princípio **Local-First, Cloud-Synced**, garantindo resiliência operacional absoluta: os operadores podem registar atividades sem interrupções mesmo sob perda total de conectividade, sendo os dados guardados localmente em **IndexedDB** e sincronizados de forma transparente com o banco de dados relacional **Supabase / PostgreSQL** e **Firebase Authentication** assim que a rede for restabelecida.
+## 🧭 Princípios de Engenharia
 
----
-
-## 1. Arquitetura Técnica & Stack Tecnológica
-
-O sistema segue um modelo de Clean Architecture com separação clara por camadas:
-*   **Camada de UI (`src/components/`, `src/App.tsx`):** Componentes reativos, puramente visuais, sem lógica de negócios acoplada.
-*   **Camada de Estado (Zustand Stores - `src/stores/`):** Centralização de todo o estado operacional do sistema para evitar acoplamento no `App.tsx`.
-*   **Camada de Serviços e Integrações (`src/sheetService.ts`, `src/lib/supabase.ts`):** Regras de sincronização, envio em lote e comunicação com APIs externas.
-
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                                 Navegador                                  │
-│  ┌───────────────────────┐   ┌──────────────────────┐   ┌───────────────┐  │
-│  │   UI (React + Vite)   │──>│    Zustand Stores    │──>│  IndexedDB    │  │
-│  └───────────────────────┘   └──────────────────────┘   └───────────────┘  │
-└──────────────────────────────────────┬─────────────────────────────────────┘
-                                       │ (HTTPS / Realtime Synced)
-                                       ▼
-                         ┌──────────────────────────┐
-                         │   Supabase Cloud DB      │
-                         │   (Direct Client Upsert) │
-                         └──────────────────────────┘
-```
-
-*   **Front-End:**
-    *   **React 19 + Vite:** Renderização rápida de componentes e fluxo de estado reativo.
-    *   **Zustand:** Gerenciamento de estado global centralizado, divididos em:
-        *   `useSectorStore`: Foco setorial e sub-setores do armazém.
-        *   `useCollaboratorStore`: Gerenciamento do operador ativo, login do coordenador e perfis.
-        *   `useUIStore`: Controle de protetor de tela, abas ativas, notificações temporárias (toasts) e logs de interface.
-        *   `useHistoryStore`: Cache de registros de atividades carregadas e estado de rede local/cloud.
-    *   **Tailwind CSS:** Interface customizada num tema escuro com aspeto de terminal industrial (Alta legibilidade, alto contraste e elementos visuais minimalistas).
-    *   **Framer Motion (`motion/react`):** Micro-animações fluidas e transições de painéis.
-    *   **Recharts / D3:** Dashboards de análise visual para KPIs de produtividade e curvas de VPH.
-*   **Armazenamento de Dados & Persistência:**
-    *   **Local (IndexedDB):** Repositório local gerido por `dbLocal.ts` para persistência no navegador, eliminando perda de dados por encerramento de abas ou perda de energia.
-    *   **Nuvem (Supabase / PostgreSQL):** Banco de dados relacional que consolida todos os registos operacionais da equipa, ligando registos ao utilizador autenticado por `user_id`.
-*   **Segurança e Autenticação:**
-    *   **Firebase Authentication:** Sistema robusto de Login Único (SSO) com Google Sign-In integrado.
-    *   **Supabase Row Level Security (RLS):** Proteção direta nas tabelas da nuvem se preferir realizar a sincronização direta de forma serverless.
+1. **Offline-First e Tolerância a Falhas:** O operador nunca é bloqueado. Sem rede, os dados são enfileirados no `IndexedDB` e transmitidos automaticamente assim que a conexão é restaurada.
+2. **Ergonomia Operacional:** Foco em navegação passo a passo para reduzir a carga cognitiva, botões largos (touch-friendly), e motor de *Web Audio API* para bipes de sucesso e erro diretamente no hardware do coletor.
+3. **Integração Híbrida e Segura:** Comunicação com sistemas legados (IBM AS/400 DB2) para leitura, e consolidação de dados de produtividade em nuvem (Google Sheets e Supabase).
 
 ---
 
-## 2. Estrutura do Repositório
+## 🏗️ Arquitetura do Sistema
 
-```
-├── .env.example              # Exemplo de configuração de variáveis de ambiente
-├── .github/workflows/        # CI/CD Workflows para Deploy
-│   └── deploy.yml            # Pipeline de deploy automatizado para GitHub Pages
-├── docs/                     # Documentação de apoio
-│   ├── operacional.md        # Manual de uso detalhado do painel operacional
-│   └── supabase_schema.sql   # Script SQL para provisionar tabelas no Supabase
-├── metadata.json             # Metadados e permissões da aplicação no AI Studio
-├── package.json              # Gestor de dependências e scripts do sistema
-├── server.ts                 # Ponto de entrada do servidor Express API (opcional)
-├── tsconfig.json             # Configuração do TypeScript
-├── vite.config.ts            # Configuração do Vite (HMR ajustado para produção)
-├── src/
-│   ├── App.tsx               # Componente principal do cliente e orquestrador de renderização
-│   ├── dbLocal.ts            # Motor de base de dados local (IndexedDB)
-│   ├── eventBus.ts           # Canal de comunicação de eventos globais de atividades
-│   ├── index.css             # Estilos globais e definições de variáveis do Terminal
-│   ├── sheetService.ts       # Serviço de integração de backup para Google Sheets
-│   ├── types.ts              # Definições globais de interfaces TypeScript
-│   ├── stores/               # Estado Global Centralizado (Zustand)
-│   │   ├── sectorStore.ts         # Estado de foco setorial
-│   │   ├── collaboratorStore.ts   # Estado de operadores e colaboradores
-│   │   ├── uiStore.ts             # Estado de janelas, protetor de tela e toasts
-│   │   └── historyStore.ts        # Estado do histórico de registos locais/remotos
-│   ├── components/           # Componentes modulares da interface
-│   │   ├── DashboardMetrics.tsx   # Painel superior com KPIs (VPH Médio, Total de Peças, etc.)
-│   │   ├── StopwatchPanel.tsx     # Cronómetros para atividades diretas e indiretas
-│   │   ├── HistoryTab.tsx         # Tabela de registos, painel de importação/exportação e filtros
-│   │   ├── VphChart.tsx           # Gráfico cartesiano de produtividade horária
-│   │   └── Screensaver.tsx        # Screensaver de inatividade operacional para proteção do monitor
-│   ├── lib/                  # Bibliotecas e SDKs de terceiros
-│   │   ├── firebase.ts            # Configuração do Firebase Client (Auth)
-│   │   └── supabase.ts            # Configuração do Supabase Client (Persistência Nuvem)
-```
+### Frontend (Coletores / Torre de Controle)
+* **Framework:** React 18+ com TypeScript (Vite).
+* **Styling:** Tailwind CSS (Mobile-first, alto contraste e suporte a tema "Fósforo Verde" AS/400).
+* **Gerenciamento de Estado:** Zustand.
+* **Ícones e Animações:** Lucide React e Framer Motion.
+* **Persistência Local:** `IndexedDB` (banco principal offline) e `localStorage` (credenciais e configurações).
+
+### Backend & Cloud (Integração)
+* **API Bridge:** Node.js (Express) servindo como ponte segura para ODBC (AS/400) e proxy para Webhooks.
+* **Tempo Real:** Supabase (PostgreSQL) com WebSockets (`Supabase Realtime`) para presença e prevenção de colisões.
+* **Consolidação/Relatórios:** Webhooks via Google Apps Script apontando para o Google Sheets (`Controle de horas - Repro`).
 
 ---
 
-## 3. Compatibilidade Total com GitHub Pages & Supabase
+## 🚀 Estado Atual: Fases A1 e A2 (Operacional)
 
-O sistema foi preparado para ser compilado como um aplicativo estático puramente client-side e hospedado sem custos no **GitHub Pages**, enquanto consome os recursos de nuvem em tempo real através do **Supabase**:
+O sistema encontra-se congelado e estável para **Testes de Campo (PoC)** no galpão com as seguintes funcionalidades:
 
-### Vantagens desta Arquitetura:
-1.  **Custo Zero de Servidor:** O frontend é servido como HTML/JS estático.
-2.  **Modo Offline Garantido:** Mesmo sem Supabase ativo ou sem internet, o IndexedDB local assume o controle para que a produção no armazém não pare.
-3.  **Sincronização Direta na Nuvem:** O cliente envia os logs de forma assíncrona ao Supabase usando chaves anônimas seguras.
-
----
-
-## 4. Variáveis de Ambiente e Configuração
-
-Crie e configure o ficheiro `.env` na raiz do projeto (ou configure os Secrets no repositório GitHub para deploy automático) com as seguintes variáveis:
-
-```env
-# Configuração de Autenticação do Firebase (Client-side)
-VITE_FIREBASE_API_KEY=sua_api_key_aqui
-VITE_FIREBASE_AUTH_DOMAIN=seu_projeto.firebaseapp.com
-VITE_FIREBASE_PROJECT_ID=seu_projeto
-VITE_FIREBASE_STORAGE_BUCKET=seu_projeto.appspot.com
-VITE_FIREBASE_MESSAGING_SENDER_ID=seu_sender_id
-VITE_FIREBASE_APP_ID=seu_app_id
-
-# Supabase (Integração Direta Client-side)
-VITE_SUPABASE_URL=https://seu_projeto_supabase.supabase.co
-VITE_SUPABASE_ANON_KEY=sua_chave_anonima_publica
-```
+* **Módulo Operacional PDT (Reabastecimento Guiado):** Fluxo step-by-step (Endereço → CTN Pai → CTN Filho → Artigo → Qtd) com validação local baseada em regras importadas por CSV.
+* **Fila de Sincronização Automática (Sync Engine):** O `syncStore` checa o `navigator.onLine` a cada 3 segundos. Estando online, realiza o "flush" do IndexedDB para a nuvem.
+* **Torre de Gestão (Management Module):** Painel web para supervisores visualizarem logs em tempo real, auditarem ruas e configurarem integrações sem recompilar o código.
+* **Mock ODBC:** Simulação do banco IBM AS/400 no frontend para testes de UI e auditoria cruzada.
 
 ---
 
-## 5. Comandos e Execução
+## 🗺️ Roadmap de Arquitetura: Fases A3 e A4 (Aprovado)
 
-Os comandos abaixo controlam o ciclo de desenvolvimento e colocação em produção:
+As próximas fases trarão robustez de missão crítica ao sistema, substituindo os mocks atuais por soluções de engenharia avançadas:
+
+### Fase A3: Segurança, Cache TTL e Reatividade
+1. **Backend Blindado (Zero SQL Injection):** O catálogo de queries SQL (`SQL_CATALOG`) será migrado integralmente para o servidor Node.js. O frontend passará a enviar apenas o `queryId` e os parâmetros. O Backend resolverá o template e executará a consulta.
+2. **Cache com Time-To-Live (TTL):** Implementação de expiração rígida de cache (ex: 60 minutos) para dados de estoque vindos do WMS. Previne que operadores tomem decisões baseadas em *Stale Data* (dados obsoletos).
+3. **Reatividade Zustand + IndexedDB (`useRuleStore`):** Injeção automatizada dos resultados das queries WMS diretamente na *store* de validação local do PDT, atualizando a interface do operador sem necessidade de *refresh*.
+
+### Fase A4: Colaboração Realtime e KPIs Gerenciais
+1. **Prevenção de Colisão (Soft Lock):** Utilização do `useSupabaseRealtime` para monitorar a presença. Se o Operador A tentar bipar um endereço que o Operador B acabou de iniciar, o PDT emitirá um alerta bloqueante suave, permitindo ao Operador A "Assumir o Risco" caso confirme visualmente que o colega não está mais na rua.
+2. **Motor de Produtividade (VPH e EPH):** Consolidação matemática cruzando as Horas Diretas (produção), Horas Indiretas (treinamento/reuniões) e os Volumes processados para gerar os KPIs definitivos de **VPH Net** (Volumes por Hora Líquida) e **VPH Bruto**.
+
+---
+
+## 🛠️ Como Executar o Projeto
 
 ```bash
-# 1. Instalação de dependências do projeto
+# 1. Instalar as dependências
 npm install
 
-# 2. Executar em ambiente de desenvolvimento local
+# 2. Configurar variáveis de ambiente
+# Renomeie o arquivo .env.example para .env e preencha as credenciais
+cp .env.example .env
+
+# 3. Rodar o servidor de desenvolvimento (Frontend + Backend Bridge)
 npm run dev
 
-# 3. Compilação para produção (gera pasta dist/ pronta para Vercel, Cloud Run ou GitHub Pages)
+# 4. Build para Produção
 npm run build
-
-# 4. Iniciar servidor de produção
 npm start
 ```
-
----
-
-## 6. Deploy: GitHub Pages & Vercel (Produção e Prévia)
-
-O projeto está totalmente configurado para publicação contínua tanto no **GitHub Pages** quanto no **Vercel**, com fluxos dedicados de **Produção** e **Prévia (Preview)**.
-
-### 6.1. GitHub Pages (Produção & Prévia)
-
-#### A. Produção Automática (`.github/workflows/deploy.yml`)
-1. No seu repositório no GitHub, acesse **Settings > Pages**.
-2. Em **Build and deployment > Source**, selecione:
-   - **GitHub Actions** (Recomendado) ou Deploy from branch `gh-pages` / `/root`.
-3. A cada `push` na branch `main` ou `master` (ou via acionamento manual em *Actions*):
-   - O workflow compila os arquivos estáticos na pasta `dist/`.
-   - Gera automaticamente o `404.html` (para roteamento SPA) e o arquivo `.nojekyll`.
-   - Publica o site no endereço: `https://<seu-usuario>.github.io/<seu-repositorio>/`.
-
-#### B. Prévia / Validação de Pull Requests (`.github/workflows/preview.yml`)
-- Ao abrir ou atualizar um **Pull Request**, o workflow de **Prévia** valida o typecheck (`npm run lint`), compila o bundle de teste e anexa os artefatos compilados na aba **Actions** do GitHub, além de disponibilizar a versão de preview na branch `gh-pages-preview`.
-
----
-
-### 6.2. Vercel (Produção & Prévia)
-
-#### Opção A: Deploy Direto via Vercel Dashboard (Automático)
-1. Acesse [vercel.com](https://vercel.com) e clique em **Add New Project**.
-2. Importe o repositório do **GitHub**.
-3. O Vercel detectará as configurações pelo arquivo `vercel.json` (Framework: Vite, Build: `npm run build`, Output: `dist`).
-4. Clique em **Deploy**. A cada Pull Request, o Vercel criará automaticamente uma URL de **Prévia (Preview)** e, ao fazer merge na `main`, publicará em **Produção**.
-
-#### Opção B: Deploy via GitHub Actions CI/CD (`.github/workflows/deploy-vercel.yml`)
-1. No repositório GitHub, acesse **Settings > Secrets and variables > Actions**.
-2. Configure as variáveis `VERCEL_TOKEN`, `VERCEL_ORG_ID` e `VERCEL_PROJECT_ID`.
-3. O pipeline efetuará o deploy automático com verificação prévia de código.
-
----
-
-## 7. Documentação & Manuais
-
-O sistema conta com documentação completa para desenvolvedores, líderes e operadores:
-*   📖 **Documentação Completa do Sistema:** [docs/DOCUMENTACAO_COMPLETA_SISTEMA.md](docs/DOCUMENTACAO_COMPLETA_SISTEMA.md) (Arquitetura, módulos, fórmulas de VPH/EPH, esquema de banco e troubleshooting).
-*   📊 **Manual do Follow-up Semanal:** [DOCUMENTACAO_FOLLOWUP_SEMANAL.md](DOCUMENTACAO_FOLLOWUP_SEMANAL.md) (Consolidação de setores 87-90, relatórios e KPIs).
-*   ⏱️ **Manual da Tela Operacional:** [docs/operacional.md](docs/operacional.md) (Guia do operador para cronometragem e apontamento).
-*   🗄️ **Esquema SQL Supabase:** [docs/supabase_schema.sql](docs/supabase_schema.sql) (Script para provisionamento de banco de dados).
-
----
-
-## 7. Licença e Garantia Operacional
-
-Este software foi desenhado e otimizado com foco na velocidade de registo em ecrãs táteis de terminais industriais. Para garantir o melhor desempenho:
-1.  Mantenha uma sessão ativa de utilizador com o Google para assegurar que as tabelas de VPH e Ranking contêm dados representativos de toda a operação de intralogística.
-2.  As exportações de dados em formato `.xlsx` geradas pelo Terminal REPRO utilizam os cabeçalhos nativos aceites pelo próprio leitor, permitindo transferir e restaurar backups entre terminais de armazém de forma extremamente flexível.
-3.  Para mais informações sobre o uso detalhado do painel do operador, consulte o manual em `docs/operacional.md`.

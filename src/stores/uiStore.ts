@@ -6,7 +6,7 @@ export interface Toast {
   color: string;
 }
 
-export type TabType = 'cronometro' | 'ruas' | 'gestao' | 'painel' | 'historico' | 'followup';
+export type TabType = 'cronometro' | 'ruas' | 'apoio' | 'gestao' | 'painel' | 'historico' | 'followup' | 'guiado';
 export type AppTheme = 'torre' | 'as400';
 
 interface UIState {
@@ -41,14 +41,14 @@ export const useUIStore = create<UIState>((set) => ({
     if (typeof window !== 'undefined' && window.location.search) {
       const urlParams = new URLSearchParams(window.location.search);
       const tabParam = (urlParams.get('tab') || urlParams.get('view')) as TabType;
-      if (tabParam && ['cronometro', 'ruas', 'gestao', 'painel', 'historico', 'followup'].includes(tabParam)) {
+      if (tabParam && ['cronometro', 'ruas', 'apoio', 'gestao', 'painel', 'historico', 'followup'].includes(tabParam)) {
         return tabParam;
       }
     }
 
     // 2. Persistência no LocalStorage
     const saved = localStorage.getItem('repro_active_tab') as TabType;
-    if (saved === 'cronometro' || saved === 'ruas' || saved === 'gestao' || saved === 'painel' || saved === 'historico' || saved === 'followup') {
+    if (saved === 'cronometro' || saved === 'ruas' || saved === 'apoio' || saved === 'gestao' || saved === 'painel' || saved === 'historico' || saved === 'followup') {
       return saved;
     }
     return 'cronometro';

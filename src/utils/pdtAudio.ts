@@ -241,6 +241,89 @@ class PdtAudioFeedback {
       }
     }
   }
+
+  /**
+   * Bipe clássico de Scanner de Código de Barras (Zebra / Symbol 2400Hz alto)
+   */
+  public playBarcodeBeep(): void {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(2400, now);
+      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + 0.07);
+      this.triggerHaptic(40);
+    } catch {
+      // Ignorado
+    }
+  }
+
+  /**
+   * Som de Erro / Divergência (Tom grave duplo dissonante 220Hz / 180Hz)
+   */
+  public playScanError(): void {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+
+      osc1.type = 'sawtooth';
+      osc1.frequency.setValueAtTime(220, now);
+      osc1.frequency.linearRampToValueAtTime(140, now + 0.28);
+      gain1.gain.setValueAtTime(0.28, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+
+      osc1.start(now);
+      osc1.stop(now + 0.3);
+      this.triggerHaptic(120);
+    } catch {
+      // Ignorado
+    }
+  }
+
+  /**
+   * Som de Alerta / Atenção (Tom duplo 750Hz)
+   */
+  public playScanWarning(): void {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(750, now);
+      osc.frequency.setValueAtTime(900, now + 0.1);
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + 0.22);
+      this.triggerHaptic(60);
+    } catch {
+      // Ignorado
+    }
+  }
 }
 
 export const pdtAudio = new PdtAudioFeedback();

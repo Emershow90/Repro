@@ -23,6 +23,10 @@ import {
   Filter
 } from 'lucide-react';
 import { StreetSummary, OperationalEvent, Log, ReproDemand } from '../types';
+import As400ConfigModule from './As400ConfigModule';
+import { executeCatalogQuery } from '../services/odbcService';
+import { useRuleStore } from '../stores/ruleStore';
+
 
 interface OdbcQueryBridgeProps {
   streetSummaries: StreetSummary[];
@@ -273,6 +277,61 @@ LEFT OUTER JOIN NEWGES.MTC7REP ON BITGC2 = C7QXTT
 WHERE BITGC2 LIKE 'PFE%'`
   },
   {
+    id: 'AUD002',
+    categoria: 'Reabastecimento',
+    nome: 'AUD002 — Rastreio por N° reappro (AS/400)',
+    descricao: 'Rastreia movimentações e status de palete/pulmão pelo número de reabastecimento desejado.',
+    sql: `SELECT 
+    a.OZH6N3 AS NUM_REAPPRO, 
+    b.O0BHNR AS ARTIGO, 
+    b.O0ENN5 AS CTN_PERE, 
+    b.O0EON5 AS CTN_FILS, 
+    d.F8BFCE AS ZONA_PULMAO, 
+    d.F8BECE AS ZONA_PICKING, 
+    b.O0IOSW AS STATUS_MOVIMENTACAO 
+FROM newges.stozrep a 
+INNER JOIN newges.sto0rep b ON a.OZL4N5 = b.O0L4N5 
+LEFT JOIN newges.smf8cpp d ON a.OZH6N3 = d.F8H6N3 
+    AND b.O0BHNR = d.F8BHNR 
+    AND b.O0ENN5 = d.F8M7NX 
+WHERE a.OZH6N3 = $param1
+ORDER BY b.O0ENN5, b.O0EON5;`
+  },
+  {
+    id: 'AUD003',
+    categoria: 'Reabastecimento',
+    nome: 'AUD003 — Rastreio por CTN père (Palete Mãe)',
+    descricao: 'Rastreia a descendência e status de movimentações a partir do código do Palete Mãe.',
+    sql: `SELECT 
+    b.O0ENN5 AS CTN_PERE, 
+    b.O0EON5 AS CTN_FILS, 
+    b.O0BHNR AS ARTIGO, 
+    a.OZH6N3 AS NUM_REAPPRO, 
+    b.O0IOSW AS STATUS_MOVIMENTACAO 
+FROM newges.sto0rep b 
+INNER JOIN newges.stozrep a ON b.O0L4N5 = a.OZL4N5 
+WHERE b.O0ENN5 = $param1
+ORDER BY b.O0EON5;`
+  },
+  {
+    id: 'AUD004',
+    categoria: 'Reabastecimento',
+    nome: 'AUD004 — Rastreio por CTN Fils (Caixa Filha)',
+    descricao: 'Consulta individual pelo número de caixa filha identificando endereços de coleta e guarda.',
+    sql: `SELECT 
+    b.O0EON5 AS CTN_FILS, 
+    b.O0ENN5 AS CTN_PERE, 
+    b.O0BHNR AS ARTIGO, 
+    a.OZH6N3 AS NUM_REAPPRO, 
+    d.F8BFCE AS ENDERECO_COLETA, 
+    d.F8BECE AS ENDERECO_GUARDAR 
+FROM newges.sto0rep b 
+INNER JOIN newges.stozrep a ON b.O0L4N5 = a.OZL4N5 
+LEFT JOIN newges.smf8cpp d ON a.OZH6N3 = d.F8H6N3 
+    AND b.O0ENN5 = d.F8M7NX 
+WHERE b.O0EON5 = $param1;`
+  },
+  {
     id: 'REC025',
     categoria: 'Endereços Vazios',
     nome: 'REC025 — Endereços Vazios por Zona',
@@ -446,6 +505,10 @@ export default function OdbcQueryBridge({
   const [queryOutput, setQueryOutput] = useState<any[] | null>(null);
   const [codeLanguage, setCodeLanguage] = useState<'csharp' | 'python' | 'curl'>('csharp');
   const [auditFilter, setAuditFilter] = useState<'TODOS' | 'BATIDO' | 'DIVERGENCIA' | 'PENDENTE'>('TODOS');
+  const [activeBridgeTab, setActiveBridgeTab] = useState<'as400' | 'cruzada' | 'queries'>('as400');
+  const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
+
+  const syncRulesFromQuery = useRuleStore(state => state.syncRulesFromQuery);
 
   // Realizado Manual consolidado por Setor + Rua a partir dos logs reais
   const manualDoneByStreet = useMemo(() => {
@@ -551,53 +614,30 @@ export default function OdbcQueryBridge({
 
   const handleExecuteQuery = async () => {
     setIsExecuting(true);
+    setSyncStatusMsg(null);
     try {
-      const res = await fetch('/api/odbc/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          queryId: selectedQuery.id,
-          sql: selectedQuery.sql,
-          summaries: streetSummaries
-        })
+      const res = await executeCatalogQuery({
+        queryId: selectedQuery.id,
+        params: { param1: '2023-01-01', param2: '2025-12-31' },
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        setQueryOutput(data.rows || []);
-        onAddToast(`Query ${selectedQuery.id} executada com sucesso via Bridge OBD!`, 'var(--color-success)');
-      } else {
-        // Local simulation fallback
-        const simulated = streetSummaries.map((s, idx) => ({
-          ARTICLE: `ART-${(1001 + idx)}`,
-          DESIGNATION: `ARTIGO REABASTECIMENTO ${s.rua}`,
-          SECTEUR: s.setor,
-          UNIVERS: `UNI-${s.setor}`,
-          ADRESSE_PICKING: `PICK-${s.rua}-01`,
-          QTE_PICKING: s.realizado,
-          QTE_STOCK: s.demanda || (s.realizado + 20),
-          QTE_A_REABASTECER: s.pendente || 0,
-          STATUS_NOVO: s.status
-        }));
-        setQueryOutput(simulated);
-        onAddToast(`Query executada via simulação de banco local IndexedDB!`, 'var(--color-success)');
-      }
-    } catch {
-      const simulated = streetSummaries.map((s, idx) => ({
-        ARTICLE: `ART-${(1001 + idx)}`,
-        DESIGNATION: `ARTIGO REABASTECIMENTO ${s.rua}`,
-        SECTEUR: s.setor,
-        UNIVERS: `UNI-${s.setor}`,
-        ADRESSE_PICKING: `PICK-${s.rua}-01`,
-        QTE_PICKING: s.realizado,
-        QTE_STOCK: s.demanda || (s.realizado + 20),
-        QTE_A_REABASTECER: s.pendente || 0,
-        STATUS_NOVO: s.status
-      }));
-      setQueryOutput(simulated);
-      onAddToast(`Query executada via motor de simulação local!`, 'var(--color-success)');
+      setQueryOutput(res.rows || []);
+      onAddToast(`Query ${selectedQuery.id} executada! Fonte: ${res.source}`, 'var(--color-success)');
+    } catch (err: any) {
+      onAddToast(err.message || 'Falha ao executar consulta.', 'var(--color-danger)');
     } finally {
       setIsExecuting(false);
+    }
+  };
+
+  const handleImportToPdtRules = async () => {
+    if (!queryOutput || queryOutput.length === 0) return;
+    try {
+      const count = await syncRulesFromQuery(queryOutput);
+      setSyncStatusMsg(`✅ ${count} regras ativas injetadas no coletor PDT! A operação já pode usar.`);
+      onAddToast(`✅ ${count} regras ativas injetadas no coletor PDT!`, 'var(--color-success)');
+    } catch (err: any) {
+      setSyncStatusMsg(`❌ Erro de integridade ao gravar no PDT: ${err?.message}`);
+      onAddToast(`❌ Erro de integridade ao gravar no PDT: ${err?.message}`, 'var(--color-danger)');
     }
   };
 
@@ -699,10 +739,75 @@ if __name__ == "__main__":
             <Play size={13} className={isExecuting ? 'animate-spin' : ''} />
             <span>{isExecuting ? 'Executando Query...' : `Testar Query ${selectedQuery.id}`}</span>
           </button>
+          {queryOutput && (
+            <button
+              type="button"
+              onClick={handleImportToPdtRules}
+              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase rounded-xl shadow-md flex items-center gap-2 cursor-pointer transition-all"
+            >
+              <Download size={13} />
+              <span>Importar ao PDT</span>
+            </button>
+          )}
         </div>
       </div>
+      
+      {syncStatusMsg && (
+        <div className="px-4 py-2 mt-2 bg-slate-900 border border-slate-700 rounded-lg text-sm font-semibold">
+          {syncStatusMsg}
+        </div>
+      )}
 
-      {/* PAINEL 1: AUDITORIA CRUZADA (QUERY OBD WMS x FEITO MANUAL DOS OPERADORES) */}
+
+      {/* SELETOR DE SUB-ABAS DA BRIDGE ODBC / AS400 */}
+      <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-950 border border-white/10 overflow-x-auto no-scrollbar">
+        <button
+          type="button"
+          onClick={() => setActiveBridgeTab('as400')}
+          className={`flex-1 min-w-[200px] py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer ${
+            activeBridgeTab === 'as400'
+              ? 'bg-purple-600 text-white shadow-lg border border-purple-400'
+              : 'text-slate-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Server size={15} />
+          <span>1. Conexão & Auditoria AS/400 (PoC)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveBridgeTab('cruzada')}
+          className={`flex-1 min-w-[200px] py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer ${
+            activeBridgeTab === 'cruzada'
+              ? 'bg-emerald-600 text-white shadow-lg border border-emerald-400'
+              : 'text-slate-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Activity size={15} />
+          <span>2. Auditoria Cruzada Ruas (Manual x WMS)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveBridgeTab('queries')}
+          className={`flex-1 min-w-[200px] py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer ${
+            activeBridgeTab === 'queries'
+              ? 'bg-cyan-600 text-white shadow-lg border border-cyan-400'
+              : 'text-slate-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Database size={15} />
+          <span>3. Catálogo SQL & Snippets</span>
+        </button>
+      </div>
+
+      {/* ABA 1: CONFIGURAÇÃO AS/400 E AUDITORIA COMPARATIVA COM INDEXEDDB */}
+      {activeBridgeTab === 'as400' && (
+        <As400ConfigModule onAddToast={onAddToast} />
+      )}
+
+      {/* ABA 2: AUDITORIA CRUZADA (QUERY OBD WMS x FEITO MANUAL DOS OPERADORES) */}
+      {activeBridgeTab === 'cruzada' && (
       <div className="p-4 rounded-2xl bg-slate-950 border border-emerald-500/40 shadow-2xl space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2 border-b border-white/10 pb-3">
           <div className="flex items-center gap-3">
@@ -842,8 +947,10 @@ if __name__ == "__main__":
           </table>
         </div>
       </div>
+      )}
 
-      {/* PAINEL 2: CATÁLOGO DE QUERIES OBD / WMS NEWGES */}
+      {/* ABA 3: CATÁLOGO DE QUERIES OBD / WMS NEWGES */}
+      {activeBridgeTab === 'queries' && (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         
         {/* Coluna Esquerda: Lista de Queries por Categoria */}
@@ -1042,6 +1149,7 @@ if __name__ == "__main__":
         </div>
 
       </div>
+      )}
 
     </div>
   );

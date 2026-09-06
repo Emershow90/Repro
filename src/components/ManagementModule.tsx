@@ -64,8 +64,12 @@ import { getState, saveState, getOperationalSyncQueue, clearOperationalSyncQueue
 import { postBatchToGoogleSheets } from '../sheetService';
 import DiagnosticsTelemetryView from './DiagnosticsTelemetryView';
 import OdbcQueryBridge from './OdbcQueryBridge';
+import SupabaseConfigModule from './SupabaseConfigModule';
 import HelpSupportModal from './HelpSupportModal';
+import ProductivityFollowup from './ProductivityFollowup';
+import { calculateProductivityMetrics } from '../productivityHelper';
 import { useUIStore } from '../stores/uiStore';
+import { useSupabaseRealtime } from '../hooks/useSupabaseRealtime';
 
 interface ManagementModuleProps {
   logs: Log[];
@@ -105,7 +109,7 @@ export default function ManagementModule({
 
   const [selectedSector, setSelectedSector] = useState<string>('TODOS');
   const [searchFilter, setSearchFilter] = useState('');
-  const [activeSubView, setActiveSubView] = useState<'resumo' | 'eventos' | 'odbc' | 'repro' | 'sheets' | 'externo' | 'diagnostico'>('resumo');
+  const [activeSubView, setActiveSubView] = useState<'resumo' | 'eventos' | 'odbc' | 'repro' | 'sheets' | 'externo' | 'diagnostico' | 'supabase' | 'followup'>('resumo');
 
   const {
     screensaverEnabled,
@@ -131,13 +135,6 @@ export default function ManagementModule({
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [helpModalTab, setHelpModalTab] = useState<'manual' | 'sheets' | 'tv' | 'sql'>('sheets');
 
-  const handleCopy = (text: string, type: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedType(type);
-    onAddToast('Copiado para a área de transferência!', 'var(--color-success)');
-    setTimeout(() => setCopiedType(null), 3000);
-  };
-
   // Carregar dados locais do IndexedDB
   const loadLocalData = useCallback(async () => {
     try {
@@ -156,6 +153,24 @@ export default function ManagementModule({
       console.warn('Erro ao carregar dados do IndexedDB no Painel de Gestão', err);
     }
   }, []);
+
+  // Supabase Realtime Hook integration
+  const { payloads, isConnected } = useSupabaseRealtime('operational_events');
+
+  useEffect(() => {
+    if (payloads.length > 0) {
+      const latest = payloads[payloads.length - 1];
+      onAddToast(`📡 Evento em tempo real recebido!`, 'var(--color-info)');
+      loadLocalData();
+    }
+  }, [payloads, onAddToast, loadLocalData]);
+
+  const handleCopy = (text: string, type: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedType(type);
+    onAddToast('Copiado para a área de transferência!', 'var(--color-success)');
+    setTimeout(() => setCopiedType(null), 3000);
+  };
 
   useEffect(() => {
     loadLocalData();
@@ -299,11 +314,14 @@ export default function ManagementModule({
 
     try {
       const queue = await getOperationalSyncQueue();
+      const produtividadeData = calculateProductivityMetrics(eventsList, targetDateBR.split('/').reverse().join('-'));
+      
       const payloadBatch = {
         tipo: 'SYNC_BATCH_REPRO',
         data: targetDateBR,
         timestamp: Date.now(),
         resumo: streetSummaries,
+        produtividade: produtividadeData,
         eventos: queue.slice(0, 50) // Envia lote de até 50 eventos pendentes
       };
 
@@ -501,6 +519,19 @@ export default function ManagementModule({
 
         <button
           type="button"
+          onClick={() => setActiveSubView('supabase')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeSubView === 'supabase'
+              ? 'bg-orange-500 text-black shadow-md'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <Database size={14} />
+          <span>Supabase (Tempo Real)</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveSubView('diagnostico')}
           className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
             activeSubView === 'diagnostico'
@@ -510,6 +541,19 @@ export default function ManagementModule({
         >
           <ShieldCheck size={14} />
           <span>Performance & Diagnóstico</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubView('followup')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeSubView === 'followup'
+              ? 'bg-blue-600 text-white shadow-md'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <TrendingUp size={14} />
+          <span>Follow-Up VPH</span>
         </button>
       </div>
 
@@ -669,7 +713,19 @@ export default function ManagementModule({
             <div className="flex items-center gap-2">
               <Database size={16} className="text-emerald-400" />
               <div>
-                <h2 className="text-xs font-black text-white uppercase">Fila de Eventos em Espera (IndexedDB)</h2>
+                <h2 className="text-xs font-black text-white uppercase flex items-center gap-2">
+                  Fila de Eventos em Espera (IndexedDB)
+                  {isConnected ? (
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[0.55rem] flex items-center gap-1 border border-emerald-500/30">
+                      <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping"></div>
+                      REALTIME ON
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[0.55rem] border border-white/10">
+                      REALTIME OFF
+                    </span>
+                  )}
+                </h2>
                 <p className="text-[0.65rem] text-slate-400">
                   {syncQueueItems.length} eventos pendentes de sincronização para a nuvem
                 </p>
@@ -885,6 +941,32 @@ export default function ManagementModule({
               </button>
             </div>
 
+            {/* IMPORTAR REGRAS */}
+            <div className="pt-2 border-t border-white/10 mt-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const { importarRegrasPlanilha } = await import('../utils/importRules');
+                    // For demo purposes, we might use a predefined CSV URL or prompt the user.
+                    // For now, let's use a prompt if they want a specific URL, or fallback to the provided apiUrl.
+                    const csvUrl = prompt('Insira a URL do CSV publicado (Regras de Validação):', '');
+                    if (csvUrl) {
+                      const regras = await importarRegrasPlanilha(csvUrl);
+                      await saveState('regras_validacao_reabastecimento', regras);
+                      onAddToast(`Sucesso! ${regras.length} regras importadas e salvas offline.`, 'var(--color-success)');
+                    }
+                  } catch (err: any) {
+                    onAddToast(`Erro ao importar regras: ${err.message}`, 'var(--color-danger)');
+                  }
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase rounded-xl cursor-pointer shadow-md transition-all flex items-center gap-2"
+              >
+                <Download size={14} />
+                Importar Regras de Validação (CSV)
+              </button>
+            </div>
+
             {lastSyncTimestamp && (
               <p className="text-[0.68rem] text-emerald-400">
                 Última sincronização bem-sucedida às {lastSyncTimestamp}
@@ -1066,6 +1148,18 @@ export default function ManagementModule({
       {/* 7. CONTEÚDO DA SUB-VISÃO: PERFORMANCE & DIAGNÓSTICO */}
       {activeSubView === 'diagnostico' && (
         <DiagnosticsTelemetryView />
+      )}
+
+      {/* 8. CONTEÚDO DA SUB-VISÃO: SUPABASE */}
+      {activeSubView === 'supabase' && (
+        <div className="space-y-4">
+          <SupabaseConfigModule />
+        </div>
+      )}
+
+      {/* 9. CONTEÚDO DA SUB-VISÃO: FOLLOW-UP (PRODUTIVIDADE) */}
+      {activeSubView === 'followup' && (
+        <ProductivityFollowup events={eventsList} />
       )}
 
       {/* MODAL DE AJUDA & DOCUMENTAÇÃO */}
