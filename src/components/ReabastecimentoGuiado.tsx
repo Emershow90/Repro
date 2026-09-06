@@ -9,6 +9,7 @@ export const ReabastecimentoGuiado: React.FC = () => {
   const { rules: regras, loadRulesFromDb } = useRuleStore();
   const [etapa, setEtapa] = useState(0); 
   const [input, setInput] = useState('');
+  const [tarefaStartTime, setTarefaStartTime] = useState<number | null>(null);
   
   const [currentData, setCurrentData] = useState({
     endereco: '',
@@ -128,6 +129,7 @@ export const ReabastecimentoGuiado: React.FC = () => {
       
       // If we just advanced from address, log pending task start for realtime
       if (etapa === 0) {
+        setTarefaStartTime(Date.now());
         const startEvent = {
           id: `evt_start_${Date.now()}`,
           timestamp: Date.now(),
@@ -197,8 +199,34 @@ export const ReabastecimentoGuiado: React.FC = () => {
         };
         await enqueueOperationalEvent(event as any);
          
+        if (tarefaStartTime) {
+          const timeElapsed = Math.floor((Date.now() - tarefaStartTime) / 1000); // seconds
+          const vphEstimado = timeElapsed > 0 ? ((qtdInput / timeElapsed) * 3600).toFixed(2) : "0.00";
+          
+          const mlEvent = {
+            id: `evt_ml_${Date.now()}`,
+            timestamp: Date.now(),
+            tipo: 'TEMPO_RUA_ML',
+            sessionId: 'session_offline_1',
+            setor: 'G', 
+            rua: newData.endereco.substring(0,4) || 'UNK',
+            colaborador: 'Operador_X',
+            mlData: {
+              endereco: newData.endereco,
+              ctnPere: newData.ctnPere,
+              ctnFils: newData.ctnFils,
+              artigo: newData.artigo,
+              quantidade: qtdInput,
+              timeElapsedSeconds: timeElapsed,
+              vphEstimado: Number(vphEstimado)
+            }
+          };
+          await enqueueOperationalEvent(mlEvent as any);
+        }
+
         // O PULO DO GATO: Modo Desmembramento
         setEtapa(2);
+        setTarefaStartTime(Date.now());
         setCurrentData(prev => ({ ...prev, ctnFils: '', artigo: '', quantidade: '' }));
         setInput('');
       }
@@ -301,6 +329,7 @@ export const ReabastecimentoGuiado: React.FC = () => {
                   setEtapa(0);
                   setCurrentData({ endereco: '', ctnPere: '', ctnFils: '', artigo: '', quantidade: '' });
                   setInput('');
+                  setTarefaStartTime(null);
                 }}
                 className="flex items-center gap-1 text-xs px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded border border-slate-200 transition-colors font-bold"
               >
