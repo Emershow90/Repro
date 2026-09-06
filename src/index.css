@@ -26,6 +26,7 @@ body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
+  letter-spacing: 0.015em;
 }
 
 .terminal-root {
@@ -39,18 +40,18 @@ body {
 
 /* Organic Cards & Glassmorphism with Depth */
 .border-panel { 
-  border: 1px solid rgba(255, 255, 255, 0.08); 
-  background: rgba(18, 21, 30, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  border: 1px solid rgba(255, 255, 255, 0.06); 
+  background: rgba(18, 21, 30, 0.85); /* More solid */
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.6); /* Softer shadow */
   border-radius: 0.875rem;
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.3s ease;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease, border-color 0.25s ease;
 }
 
 .border-panel:hover {
-  border-color: rgba(16, 185, 129, 0.25);
-  box-shadow: 0 16px 36px -10px rgba(0, 0, 0, 0.6), 0 0 20px rgba(16, 185, 129, 0.06);
+  border-color: rgba(255, 255, 255, 0.15); /* More neutral hover */
+  box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.7);
 }
 
 .border-dashed-custom { 

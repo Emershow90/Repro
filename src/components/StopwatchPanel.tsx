@@ -674,40 +674,40 @@ export default function StopwatchPanel({
                     <button
                       type="button"
                       onClick={() => handleStartWithSound('REPRO', 'repro', 'direta')}
-                      className={`min-h-[48px] py-3 text-xs sm:text-sm font-black tracking-wider uppercase rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center ${
+                      className={`min-h-[56px] py-3 text-sm sm:text-base font-black tracking-wider uppercase rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center ${
                         timerState.cronometro?.botaoId === 'repro' && !isIndireta 
                           ? 'bg-emerald-500 text-black border-emerald-400 shadow-lg shadow-emerald-500/30' 
                           : 'bg-white/5 border-white/15 text-white hover:border-emerald-500/50 hover:bg-white/10'
                       }`}
                     >
                       <span>REPRO</span>
-                      <span className="text-[0.55rem] opacity-75 font-normal">[1]</span>
+                      <span className="text-[0.65rem] font-medium opacity-60 mt-0.5">[1]</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => handleStartWithSound('ELOG', 'elog', 'direta')}
-                      className={`min-h-[48px] py-3 text-xs sm:text-sm font-black tracking-wider uppercase rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center ${
+                      className={`min-h-[56px] py-3 text-sm sm:text-base font-black tracking-wider uppercase rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center ${
                         timerState.cronometro?.botaoId === 'elog' && !isIndireta 
                           ? 'bg-cyan-500 text-black border-cyan-400 shadow-lg shadow-cyan-500/30' 
                           : 'bg-white/5 border-white/15 text-white hover:border-cyan-500/50 hover:bg-white/10'
                       }`}
                     >
                       <span>ELOG</span>
-                      <span className="text-[0.55rem] opacity-75 font-normal">[2]</span>
+                      <span className="text-[0.65rem] font-medium opacity-60 mt-0.5">[2]</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => handleStartWithSound('DIVERSOS', 'pendencias', 'direta')}
-                      className={`min-h-[48px] py-3 text-xs sm:text-sm font-black tracking-wider uppercase rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center ${
+                      className={`min-h-[56px] py-3 text-sm sm:text-base font-black tracking-wider uppercase rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center ${
                         timerState.cronometro?.botaoId === 'pendencias' && !isIndireta 
                           ? 'bg-purple-500 text-black border-purple-400 shadow-lg shadow-purple-500/30' 
                           : 'bg-white/5 border-white/15 text-white hover:border-purple-500/50 hover:bg-white/10'
                       }`}
                     >
                       <span>DIVERSOS</span>
-                      <span className="text-[0.55rem] opacity-75 font-normal">[3]</span>
+                      <span className="text-[0.65rem] font-medium opacity-60 mt-0.5">[3]</span>
                     </button>
                   </div>
                 </div>
@@ -752,20 +752,20 @@ export default function StopwatchPanel({
                     type="button"
                     onClick={handlePauseWithSound}
                     disabled={!timerState.cronometro?.ativo}
-                    className="min-h-[48px] py-3 text-xs font-black uppercase rounded-xl border border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500 hover:text-black cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all shadow-sm"
+                    className="min-h-[52px] py-3 text-sm font-bold uppercase rounded-xl border border-amber-600/50 bg-amber-500/20 text-amber-300 hover:bg-amber-500 hover:text-black cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all"
                   >
-                    <Pause size={16} />
-                    <span>PAUSAR [ESPAÇO]</span>
+                    <Pause size={18} />
+                    <span>PAUSAR</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={handleStopWithSound}
                     disabled={(timerState.cronometro?.segundos || 0) === 0}
-                    className="min-h-[48px] py-3 text-xs font-black uppercase rounded-xl border border-emerald-500/50 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500 hover:text-black cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all shadow-sm"
+                    className="min-h-[52px] py-3 text-sm font-bold uppercase rounded-xl border border-emerald-600/50 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500 hover:text-black cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all"
                   >
-                    <Square size={16} />
-                    <span>FINALIZAR [F / ENTER]</span>
+                    <Square size={18} />
+                    <span>FINALIZAR</span>
                   </button>
                 </div>
 

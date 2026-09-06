@@ -88,7 +88,7 @@ export default function DashboardMetrics({ logs }: MetricsProps) {
             Métricas de Desempenho da Sessão
           </h2>
         </div>
-        <span className="text-[0.6rem] text-slate-400 font-mono bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
+        <span className="text-xs text-slate-400 font-mono bg-white/5 px-2.5 py-1 rounded-full border border-white/5">
           {logs.length} {logs.length === 1 ? 'registo' : 'registos'}
         </span>
       </div>
@@ -100,15 +100,15 @@ export default function DashboardMetrics({ logs }: MetricsProps) {
             <div
               key={i}
               className={`relative p-4 rounded-xl border border-white/10 bg-gradient-to-b ${c.bgGlow} bg-black/40 backdrop-blur-md ${c.borderGlow} transition-all duration-300 hover:-translate-y-1 hover:shadow-lg group ${
-                c.highlight ? 'ring-1 ring-emerald-500/30' : ''
+                c.highlight ? 'ring-2 ring-emerald-500/50 bg-emerald-950/20' : ''
               } ${i === 4 ? 'col-span-2 md:col-span-1' : ''}`}
             >
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[0.65rem] font-medium text-slate-400 uppercase tracking-wider">
+                <span className="text-xs font-semibold text-slate-300">
                   {c.title}
                 </span>
                 <div className={`p-1.5 rounded-lg bg-white/5 border border-white/5 ${c.color} group-hover:scale-110 transition-transform`}>
-                  <Icon size={14} />
+                  <Icon size={16} />
                 </div>
               </div>
 
@@ -117,13 +117,13 @@ export default function DashboardMetrics({ logs }: MetricsProps) {
                   {c.value}
                 </p>
                 {c.unit && (
-                  <span className="text-[0.55rem] font-mono text-slate-500 font-bold">
+                  <span className="text-xs font-mono text-slate-400 font-bold ml-1">
                     {c.unit}
                   </span>
                 )}
               </div>
 
-              <p className="text-[0.58rem] text-slate-500 mt-1 font-mono">
+              <p className="text-[0.7rem] text-slate-400 mt-1 font-mono">
                 {c.subtitle}
               </p>
             </div>
