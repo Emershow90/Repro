@@ -1,2 +1,0 @@
-async function p(e){try{const t=await fetch(e);if(!t.ok)throw new Error(`Falha ao buscar CSV: ${t.statusText}`);return(await t.text()).split(`
-`).filter(r=>r.trim()!=="").slice(1).map(r=>{const[a,n,o,i,s]=r.split(",");return{enderecoPere:a.trim(),contenantPere:n.trim(),contenantFils:o.trim(),artigo:i.trim(),quantidadePadrao:parseInt(s.trim(),10)}})}catch(t){throw console.error("Erro ao importar regras:",t),t}}export{p as importarRegrasPlanilha};
