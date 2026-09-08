@@ -1,6 +1,8 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ * Refactored Management Module
+ * Centralized sync orchestration, unified reporting, and improved UI/UX
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -44,7 +46,9 @@ import {
   Tv,
   Code,
   Copy,
-  Check
+  Check,
+  Zap,
+  BarChart3
 } from 'lucide-react';
 import { 
   formatDateToBR, 
@@ -61,7 +65,14 @@ import {
   inferSectorFromStreet 
 } from '../data/streetData';
 import { getState, saveState, getOperationalSyncQueue, clearOperationalSyncQueue } from '../dbLocal';
-import { postBatchToGoogleSheets } from '../sheetService';
+import { 
+  orchestrateSyncToSheets, 
+  initializeAutoSync, 
+  stopAutoSync,
+  getLastSyncMetrics,
+  triggerManualSync,
+  SyncMetrics 
+} from '../utils/syncOrchestrator';
 import DiagnosticsTelemetryView from './DiagnosticsTelemetryView';
 import OdbcQueryBridge from './OdbcQueryBridge';
 import SupabaseConfigModule from './SupabaseConfigModule';
@@ -109,7 +120,7 @@ export default function ManagementModule({
 
   const [selectedSector, setSelectedSector] = useState<string>('TODOS');
   const [searchFilter, setSearchFilter] = useState('');
-  const [activeSubView, setActiveSubView] = useState<'resumo' | 'eventos' | 'odbc' | 'repro' | 'sheets' | 'externo' | 'diagnostico' | 'supabase' | 'followup'>('resumo');
+  const [activeSubView, setActiveSubView] = useState<'resumo' | 'eventos' | 'odbc' | 'repro' | 'sheets' | 'externo' | 'diagnostico' | 'supabase' | 'followup' | 'relatorios'>('resumo');
 
   const {
     screensaverEnabled,
@@ -124,12 +135,13 @@ export default function ManagementModule({
   const [eventsList, setEventsList] = useState<OperationalEvent[]>([]);
   const [syncQueueItems, setSyncQueueItems] = useState<any[]>([]);
 
-  // Sincronização
+  // Sincronização - Refatorada com orquestrador centralizado
   const [isSyncingSheets, setIsSyncingSheets] = useState(false);
   const [internalLastSync, setInternalLastSync] = useState<string | null>(null);
+  const [syncMetrics, setSyncMetrics] = useState<SyncMetrics | null>(null);
+  const [syncProgressMsg, setSyncProgressMsg] = useState<string>('');
   const lastSyncTimestamp = externalLastSync || internalLastSync;
   const isCurrentlySyncing = Boolean(externalIsSyncing || isSyncingSheets);
-  const [syncLogsResult, setSyncLogsResult] = useState<{ success: number; errors: number } | null>(null);
 
   const [copiedType, setCopiedType] = useState<string | null>(null);
   const [showHelpModal, setShowHelpModal] = useState(false);
@@ -138,17 +150,19 @@ export default function ManagementModule({
   // Carregar dados locais do IndexedDB
   const loadLocalData = useCallback(async () => {
     try {
-      const [savedDemands, savedSession, savedEvents, queue] = await Promise.all([
+      const [savedDemands, savedSession, savedEvents, queue, metrics] = await Promise.all([
         getState<Record<string, ReproDemand>>(STORAGE_DEMANDS_KEY),
         getState<ActiveSession>(STORAGE_ACTIVE_SESSION_KEY),
         getState<OperationalEvent[]>(STORAGE_EVENTS_KEY),
-        getOperationalSyncQueue()
+        getOperationalSyncQueue(),
+        getLastSyncMetrics()
       ]);
 
       if (savedDemands) setDemands(savedDemands);
       if (savedSession) setActiveSession(savedSession);
       if (savedEvents) setEventsList(savedEvents);
       if (queue) setSyncQueueItems(queue);
+      if (metrics) setSyncMetrics(metrics);
     } catch (err) {
       console.warn('Erro ao carregar dados do IndexedDB no Painel de Gestão', err);
     }
@@ -174,9 +188,24 @@ export default function ManagementModule({
 
   useEffect(() => {
     loadLocalData();
-    const interval = setInterval(loadLocalData, 3000); // Polling leve a cada 3s para acompanhar o PDT ao vivo
+    const interval = setInterval(loadLocalData, 3000);
     return () => clearInterval(interval);
   }, [loadLocalData]);
+
+  // Initialize centralized auto-sync when component mounts
+  useEffect(() => {
+    if (apiUrl && networkStatus === 'online') {
+      initializeAutoSync({
+        apiUrl,
+        logs,
+        streetSummaries: streetSummaries || [],
+        demands,
+        events: eventsList
+      });
+
+      return () => stopAutoSync();
+    }
+  }, [apiUrl, networkStatus, logs, demands, eventsList]);
 
   // Lista de ruas do setor filtrado
   const filteredStreets = useMemo(() => {
@@ -209,7 +238,6 @@ export default function ManagementModule({
       const demanda = demandObj && demandObj.demandaCalculada > 0 ? demandObj.demandaCalculada : null;
       const unidade = demandObj ? demandObj.unidade : null;
 
-      // Soma de volumes dos logs já gravados na data
       const streetLogs = logs.filter(l => {
         const act = (l.atividade || '').toUpperCase();
         const r = (l.rua || act.replace(/REABASTECIMENTO\s*-\s*/i, '')).trim().toUpperCase();
@@ -220,7 +248,6 @@ export default function ManagementModule({
       const totalEnderecosLogs = streetLogs.reduce((acc, l) => acc + (Number(l.enderecos) || 0), 0);
       const totalHorasLogs = streetLogs.reduce((acc, l) => acc + (Number(l.horas) || 0), 0);
 
-      // Se a rua for a que está ativa no coletor neste momento, soma o temporário
       const isLiveNow = activeSession && activeSession.rua === rua && activeSession.data === selectedDate;
       const liveVolumes = isLiveNow ? (activeSession.volumes || 0) : 0;
       const liveEnderecos = isLiveNow ? (activeSession.enderecos || 0) : 0;
@@ -302,7 +329,7 @@ export default function ManagementModule({
     };
   }, [streetSummaries]);
 
-  // Sincronização com o Google Sheets (Consolidação em Lote)
+  // Sincronização com o Google Sheets - REFATORADA com orquestrador centralizado
   const handleSyncToSheets = async () => {
     if (!apiUrl || !apiUrl.startsWith('http')) {
       onAddToast('Configure a URL da API do Google Sheets nas opções.', 'var(--color-danger)');
@@ -310,47 +337,42 @@ export default function ManagementModule({
     }
 
     setIsSyncingSheets(true);
-    setSyncLogsResult(null);
+    setSyncProgressMsg('');
 
     try {
-      const queue = await getOperationalSyncQueue();
-      const produtividadeData = calculateProductivityMetrics(eventsList, targetDateBR.split('/').reverse().join('-'));
+      const metrics = await triggerManualSync(
+        {
+          apiUrl,
+          date: selectedDate,
+          logs,
+          streetSummaries,
+          demands,
+          events: eventsList,
+          onProgress: (msg: string) => {
+            setSyncProgressMsg(msg);
+            console.log(msg);
+          }
+        },
+        3 // maxRetries
+      );
+
+      setSyncMetrics(metrics);
+      setInternalLastSync(metrics.lastSyncTimestamp);
+      onAddToast(`✨ Sincronização concluída! ${metrics.syncDurationMs}ms`, 'var(--color-success)');
       
-      const payloadBatch = {
-        tipo: 'SYNC_BATCH_REPRO',
-        data: targetDateBR,
-        timestamp: Date.now(),
-        resumo: streetSummaries,
-        produtividade: produtividadeData,
-        eventos: queue.slice(0, 50) // Envia lote de até 50 eventos pendentes
-      };
-
-      const isSuccess = await postBatchToGoogleSheets(apiUrl, payloadBatch);
-
-      if (isSuccess) {
-        const processedIds = queue.slice(0, 50).map(e => e.id);
-        await clearOperationalSyncQueue(processedIds);
-        setSyncQueueItems(await getOperationalSyncQueue());
-
-        setInternalLastSync(new Date().toLocaleTimeString('pt-BR'));
-        setSyncLogsResult({ success: streetSummaries.length, errors: 0 });
-        onAddToast(`Dados consolidados enviados com sucesso para o Google Sheets!`, 'var(--color-success)');
-      } else {
-        throw new Error('Falha no envio para o Google Sheets. Verifique o link e permissões do Google Apps Script.');
-      }
     } catch (err: any) {
-      console.error('Erro de sincronização com o Sheets', err);
-      onAddToast('Erro ao sincronizar com Google Sheets. Os dados permanecem seguros no IndexedDB.', 'var(--color-danger)');
-      setSyncLogsResult({ success: 0, errors: 1 });
+      console.error('Erro na sincronização centralizada:', err);
+      onAddToast(`Erro ao sincronizar: ${err.message}`, 'var(--color-danger)');
     } finally {
       setIsSyncingSheets(false);
+      setSyncProgressMsg('');
     }
   };
 
   return (
     <div className="w-full space-y-5 font-mono text-slate-200">
       
-      {/* 1. BARRA SUPERIOR DE FILTRO & CONTROLO DE GESTÃO */}
+      {/* 1. BARRA SUPERIOR - REFATORADA COM INDICADORES DE SINCRONIZAÇÃO */}
       <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-xl flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -361,7 +383,7 @@ export default function ManagementModule({
               Painel de Gestão & Consolidação REPRO
             </h1>
             <p className="text-[0.68rem] text-slate-400">
-              Acompanhamento operacional, auditoria de eventos e integração com Google Sheets
+              Sincronização centralizada: Sheets + Supabase + Relatórios Unificados
             </p>
           </div>
         </div>
@@ -397,20 +419,34 @@ export default function ManagementModule({
             ))}
           </div>
 
-          {/* Botão Sincronizar com Planilha */}
+          {/* Indicador de Sincronização */}
+          {syncMetrics && (
+            <div className="text-[0.65rem] font-bold text-slate-400 px-2 py-1 rounded-lg bg-slate-900/50 border border-white/10">
+              <span className="text-emerald-400">✓ {syncMetrics.lastSyncTimestamp}</span>
+            </div>
+          )}
+
+          {/* Botão Sincronizar com Planilha - REFATORADO */}
           <button
             type="button"
             onClick={handleSyncToSheets}
             disabled={isSyncingSheets}
-            className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-110 disabled:opacity-50 text-black text-xs font-black uppercase rounded-xl border border-emerald-300 shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
+            className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-110 disabled:opacity-50 text-black text-xs font-black uppercase rounded-xl border border-emerald-300 shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
           >
             <RefreshCw size={13} className={isSyncingSheets ? 'animate-spin' : ''} />
-            <span>{isSyncingSheets ? 'Enviando...' : 'Sincronizar Sheets'}</span>
+            <span>{isSyncingSheets ? 'Sincronizando...' : 'Sincronizar Agora'}</span>
           </button>
         </div>
       </div>
 
-      {/* 2. CARDS DE INDICADORES GLOBAIS DO TURNO */}
+      {/* Mensagem de Progresso de Sincronização */}
+      {syncProgressMsg && (
+        <div className="p-3 rounded-xl bg-slate-900 border border-emerald-500/30 text-emerald-300 text-xs animate-pulse">
+          {syncProgressMsg}
+        </div>
+      )}
+
+      {/* 2. CARDS DE INDICADORES GLOBAIS - PADRONIZADOS */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {/* Demanda Total */}
         <div className="p-3.5 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-1">
@@ -450,117 +486,90 @@ export default function ManagementModule({
         </div>
       </div>
 
-      {/* 3. NAVEGAÇÃO DE SUB-VISÕES (RESUMO POR RUA / EVENTOS EM TEMPO REAL / CONFIG SHEETS) */}
-      <div className="flex items-center gap-2 border-b border-white/10 pb-2">
+      {/* 3. NAVEGAÇÃO DE SUB-VISÕES - COM NOVA ABA DE RELATÓRIOS */}
+      <div className="flex items-center gap-2 border-b border-white/10 pb-2 overflow-x-auto">
         <button
           type="button"
           onClick={() => setActiveSubView('resumo')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
             activeSubView === 'resumo'
               ? 'bg-emerald-500 text-black shadow-md'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
           <Activity size={14} />
-          <span>Resumo por Rua ({streetSummaries.length})</span>
+          <span>Resumo por Rua</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubView('relatorios')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+            activeSubView === 'relatorios'
+              ? 'bg-blue-500 text-white shadow-md'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <BarChart3 size={14} />
+          <span>Relatórios Consolidados</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubView('eventos')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
             activeSubView === 'eventos'
               ? 'bg-emerald-500 text-black shadow-md'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
           <RotateCw size={14} />
-          <span>Trilha de Eventos & Fila Sync ({syncQueueItems.length} na fila)</span>
+          <span>Trilha de Eventos ({syncQueueItems.length})</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubView('odbc')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
             activeSubView === 'odbc'
-              ? 'bg-purple-500 text-white shadow-md shadow-purple-500/20 font-black'
+              ? 'bg-purple-500 text-white shadow-md'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
           <Database size={14} />
-          <span>Queries SQL / ODBC & Auditoria</span>
+          <span>ODBC & Auditoria</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubView('sheets')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
             activeSubView === 'sheets'
               ? 'bg-emerald-500 text-black shadow-md'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
           <FileSpreadsheet size={14} />
-          <span>Configuração Sheets</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveSubView('externo')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-            activeSubView === 'externo'
-              ? 'bg-cyan-400 text-black shadow-md shadow-cyan-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-900'
-          }`}
-        >
-          <Globe size={14} />
-          <span>Conexão Site Externo / TV</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveSubView('supabase')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-            activeSubView === 'supabase'
-              ? 'bg-orange-500 text-black shadow-md'
-              : 'text-slate-400 hover:text-white hover:bg-slate-900'
-          }`}
-        >
-          <Database size={14} />
-          <span>Supabase (Tempo Real)</span>
+          <span>Sheets Config</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubView('diagnostico')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
             activeSubView === 'diagnostico'
               ? 'bg-gradient-to-r from-emerald-500 to-cyan-500 text-black shadow-md'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
-          <ShieldCheck size={14} />
-          <span>Performance & Diagnóstico</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveSubView('followup')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-            activeSubView === 'followup'
-              ? 'bg-blue-600 text-white shadow-md'
-              : 'text-slate-400 hover:text-white hover:bg-slate-900'
-          }`}
-        >
-          <TrendingUp size={14} />
-          <span>Follow-Up VPH</span>
+          <Zap size={14} />
+          <span>Diagnóstico</span>
         </button>
       </div>
 
-      {/* 4. CONTEÚDO DA SUB-VISÃO: RESUMO POR RUA */}
+      {/* 4. RESUMO POR RUA */}
       {activeSubView === 'resumo' && (
         <div className="space-y-3">
-          {/* Campo de Busca Rápida */}
           <div className="flex items-center gap-2 bg-slate-950 p-2 rounded-xl border border-white/10 max-w-sm">
             <Search size={14} className="text-slate-400 ml-1" />
             <input
@@ -572,7 +581,6 @@ export default function ManagementModule({
             />
           </div>
 
-          {/* Tabela de Ruas */}
           <div className="overflow-x-auto rounded-2xl border border-white/15 bg-slate-950 shadow-md">
             <table className="w-full text-left text-xs font-mono">
               <thead className="bg-slate-900 text-slate-400 uppercase text-[0.62rem] border-b border-white/10">
@@ -586,7 +594,6 @@ export default function ManagementModule({
                   <th className="py-3 px-3 text-right">Cobertura</th>
                   <th className="py-3 px-3 text-right">EPH</th>
                   <th className="py-3 px-3 text-right">VPH</th>
-                  <th className="py-3 px-3 text-right">Tempo</th>
                   <th className="py-3 px-3 text-center">Ações</th>
                 </tr>
               </thead>
@@ -660,10 +667,6 @@ export default function ManagementModule({
                         {s.vph}
                       </td>
 
-                      <td className="py-2.5 px-3 text-right text-slate-400">
-                        {new Date(s.tempoTotalSegundos * 1000).toISOString().substring(11, 19)}
-                      </td>
-
                       <td className="py-2.5 px-3 text-center">
                         <button
                           type="button"
@@ -706,7 +709,122 @@ export default function ManagementModule({
         </div>
       )}
 
-      {/* 5. CONTEÚDO DA SUB-VISÃO: TRILHA DE EVENTOS & FILA SYNC */}
+      {/* 5. NOVA ABA: RELATÓRIOS CONSOLIDADOS */}
+      {activeSubView === 'relatorios' && (
+        <div className="space-y-4">
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-950 to-slate-950 border border-blue-500/30 shadow-md space-y-3">
+            <div className="flex items-center gap-2">
+              <BarChart3 size={18} className="text-blue-400" />
+              <h2 className="text-sm font-black text-white uppercase">Relatórios Consolidados do Dia</h2>
+            </div>
+            
+            <p className="text-xs text-slate-300">
+              Visualize relatórios unificados calculados a partir dos dados consolidados no banco local. 
+              Estes dados são enviados para o Google Sheets na próxima sincronização.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-white/10">
+              {/* Card Diário */}
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-emerald-500/30 space-y-2">
+                <h3 className="text-xs font-black text-emerald-400 uppercase">Relatório Diário</h3>
+                <div className="space-y-1 text-[0.7rem]">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Data:</span>
+                    <span className="text-white font-bold">{targetDateBR}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Demanda Total:</span>
+                    <span className="text-white font-bold">{totals.totalDemanda} vol</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Realizado:</span>
+                    <span className="text-cyan-300 font-bold">{totals.totalRealizado} vol</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Cobertura:</span>
+                    <span className="text-emerald-300 font-bold">{totals.coberturaGlobal}%</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Produtividade:</span>
+                    <span className="text-purple-300 font-bold">{totals.vphGlobal} VPH</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card Semanal (Acumulado) */}
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-blue-500/30 space-y-2">
+                <h3 className="text-xs font-black text-blue-400 uppercase">Relatório Semanal</h3>
+                <div className="space-y-1 text-[0.7rem]">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Semana:</span>
+                    <span className="text-white font-bold">{getWeekNumber(targetDateBR)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Demanda Total:</span>
+                    <span className="text-white font-bold">{totals.totalDemanda} vol</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Realizado:</span>
+                    <span className="text-cyan-300 font-bold">{totals.totalRealizado} vol</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Ruas Atendidas:</span>
+                    <span className="text-emerald-300 font-bold">{totals.ruasAtendidas}/{totals.totalRuas}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">EPH Média:</span>
+                    <span className="text-purple-300 font-bold">{totals.ephGlobal}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card Mensal (Acumulado) */}
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-amber-500/30 space-y-2">
+                <h3 className="text-xs font-black text-amber-400 uppercase">Relatório Mensal</h3>
+                <div className="space-y-1 text-[0.7rem]">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Mês/Ano:</span>
+                    <span className="text-white font-bold">
+                      {new Date(selectedDate).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Demanda Total:</span>
+                    <span className="text-white font-bold">{totals.totalDemanda} vol</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Realizado:</span>
+                    <span className="text-cyan-300 font-bold">{totals.totalRealizado} vol</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Endereços:</span>
+                    <span className="text-blue-300 font-bold">{totals.totalEnderecos}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Saldo Pendente:</span>
+                    <span className="text-amber-300 font-bold">{totals.saldoPendenteGlobal} vol</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 text-xs text-slate-300 space-y-2">
+            <p>
+              ✨ <strong>Novo Fluxo Unificado:</strong> Os relatórios são calculados uma única vez a partir dos dados consolidados no banco local. 
+              Não há mais redundância de cálculos entre abas antigas.
+            </p>
+            <p>
+              🔄 <strong>Sincronização Automática:</strong> Todos os dados são enviados para Google Sheets através do orquestrador centralizado a cada 30 segundos ou ao clicar em "Sincronizar Agora".
+            </p>
+            <p>
+              📊 <strong>Supabase Webhook:</strong> Dados chegam também via webhook automático quando novos registros são inseridos, garantindo zero perda de dados por Wi-Fi instável.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 6. TRILHA DE EVENTOS - COMPACTA */}
       {activeSubView === 'eventos' && (
         <div className="space-y-4">
           <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-sm flex items-center justify-between">
@@ -727,7 +845,7 @@ export default function ManagementModule({
                   )}
                 </h2>
                 <p className="text-[0.65rem] text-slate-400">
-                  {syncQueueItems.length} eventos pendentes de sincronização para a nuvem
+                  {syncQueueItems.length} eventos pendentes de sincronização
                 </p>
               </div>
             </div>
@@ -743,40 +861,27 @@ export default function ManagementModule({
             </button>
           </div>
 
-          {/* Histórico Recente de Eventos Locais */}
           <div className="overflow-x-auto rounded-2xl border border-white/15 bg-slate-950 shadow-md">
             <table className="w-full text-left text-xs font-mono">
               <thead className="bg-slate-900 text-slate-400 uppercase text-[0.62rem] border-b border-white/10">
                 <tr>
                   <th className="py-3 px-3">Hora</th>
-                  <th className="py-3 px-3">Tipo de Evento</th>
+                  <th className="py-3 px-3">Tipo</th>
                   <th className="py-3 px-3">Setor/Rua</th>
-                  <th className="py-3 px-3 text-center">Δ Endereços</th>
                   <th className="py-3 px-3 text-center">Δ Volumes</th>
-                  <th className="py-3 px-3">Lap / Duração</th>
                   <th className="py-3 px-3">Justificativa</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {eventsList.slice(-20).reverse().map((evt) => (
+                {eventsList.slice(-15).reverse().map((evt) => (
                   <tr key={evt.id} className="hover:bg-slate-900/60 transition-colors">
                     <td className="py-2.5 px-3 text-slate-400">
                       {new Date(evt.timestamp).toLocaleTimeString('pt-BR')}
                     </td>
-                    <td className="py-2.5 px-3 font-bold text-emerald-300">
-                      {evt.tipo}
-                    </td>
-                    <td className="py-2.5 px-3 text-white">
-                      Setor {evt.setor} • <strong>{evt.rua}</strong>
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-bold text-cyan-300">
-                      {evt.enderecosDelta > 0 ? `+${evt.enderecosDelta}` : evt.enderecosDelta}
-                    </td>
+                    <td className="py-2.5 px-3 font-bold text-emerald-300">{evt.tipo}</td>
+                    <td className="py-2.5 px-3 text-white">Setor {evt.setor} • <strong>{evt.rua}</strong></td>
                     <td className="py-2.5 px-3 text-center font-bold text-amber-300">
                       {evt.volumesDelta > 0 ? `+${evt.volumesDelta}` : evt.volumesDelta}
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-400">
-                      {evt.lapDurationSeconds ? `${evt.lapDurationSeconds}s` : '---'}
                     </td>
                     <td className="py-2.5 px-3 text-slate-400">
                       {evt.justification ? (
@@ -793,7 +898,7 @@ export default function ManagementModule({
         </div>
       )}
 
-      {/* 5.5 CONTEÚDO DA SUB-VISÃO: QUERIES SQL / ODBC & AUDITORIA DE REABASTECIMENTO */}
+      {/* 7. ODBC & Auditoria */}
       {activeSubView === 'odbc' && (
         <OdbcQueryBridge
           streetSummaries={streetSummaries}
@@ -807,111 +912,14 @@ export default function ManagementModule({
             setDemands(updated);
             await saveState(STORAGE_DEMANDS_KEY, updated);
             localStorage.setItem(STORAGE_DEMANDS_KEY, JSON.stringify(updated));
-            onAddToast('Demandas da Query ODBC integradas com sucesso!', 'var(--color-success)');
+            onAddToast('Demandas integradas com sucesso!', 'var(--color-success)');
           }}
         />
       )}
 
-      {/* 6. CONTEÚDO DA SUB-VISÃO: CONFIGURAÇÃO GOOGLE SHEETS & SINCRONIZAÇÃO MULTI-MÁQUINA */}
+      {/* 8. SHEETS Config */}
       {activeSubView === 'sheets' && (
         <div className="space-y-4">
-          {/* Card Central de Sincronização Multi-Dispositivo Simultânea */}
-          <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 border border-emerald-500/40 shadow-xl space-y-4 font-mono">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-                  <Radio size={22} className={networkStatus === 'online' ? 'animate-pulse' : ''} />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-sm font-black text-white uppercase tracking-wider">
-                      Sincronização Multi-Dispositivo Simultânea (PDT ↔ PC ↔ Planilha)
-                    </h2>
-                    {networkStatus === 'online' ? (
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[0.62rem] font-black flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                        ONLINE ATIVO
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 text-[0.62rem] font-black flex items-center gap-1">
-                        <WifiOff size={10} />
-                        OFFLINE
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[0.7rem] text-slate-400 mt-0.5">
-                    Transmissão e recebimento de dados simultâneos entre múltiplos computadores e coletores Zebra/PDT.
-                  </p>
-                </div>
-              </div>
-
-              {/* Botão Forçar Sincronismo Imediato */}
-              <button
-                type="button"
-                onClick={async () => {
-                  if (onTriggerSync) {
-                    await onTriggerSync();
-                  } else {
-                    await handleSyncToSheets();
-                  }
-                }}
-                disabled={isCurrentlySyncing}
-                className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black text-xs font-black uppercase rounded-xl border border-emerald-300 shadow-lg shadow-emerald-500/20 flex items-center gap-2 cursor-pointer transition-all active:scale-95"
-              >
-                <RefreshCw size={14} className={isCurrentlySyncing ? 'animate-spin' : ''} />
-                <span>{isCurrentlySyncing ? 'Sincronizando Agora...' : 'Sincronizar Simultâneo Agora'}</span>
-              </button>
-            </div>
-
-            {/* Painel Explicativo de Arquitetura Multi-Máquina */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
-              <div className="p-3 bg-slate-900/90 rounded-xl border border-white/10 space-y-1">
-                <div className="flex items-center gap-1.5 text-emerald-400 text-xs font-bold uppercase">
-                  <Smartphone size={14} />
-                  <span>1. Coletor / PDT em Campo</span>
-                </div>
-                <p className="text-[0.65rem] text-slate-400 leading-relaxed">
-                  Ao bipejar ou apontar uma rua no Zebra/PDT, o registro é salvo localmente e enviado imediatamente para a nuvem/planilha.
-                </p>
-              </div>
-
-              <div className="p-3 bg-slate-900/90 rounded-xl border border-white/10 space-y-1">
-                <div className="flex items-center gap-1.5 text-cyan-400 text-xs font-bold uppercase">
-                  <Laptop size={14} />
-                  <span>2. Computador / Painel Torre</span>
-                </div>
-                <p className="text-[0.65rem] text-slate-400 leading-relaxed">
-                  Outro PC ou máquina online recebe os dados automaticamente a cada 30 segundos ou ao focar a aba, atualizando totais e gráficos.
-                </p>
-              </div>
-
-              <div className="p-3 bg-slate-900/90 rounded-xl border border-white/10 space-y-1">
-                <div className="flex items-center gap-1.5 text-purple-400 text-xs font-bold uppercase">
-                  <FileSpreadsheet size={14} />
-                  <span>3. Planilha Google Central</span>
-                </div>
-                <p className="text-[0.65rem] text-slate-400 leading-relaxed">
-                  Atua como banco mestre unificado (aba <strong className="text-white">Controle de horas - Repro</strong>), consolidando todos os turnos.
-                </p>
-              </div>
-            </div>
-
-            {/* Métricas da Sincronização em Tempo Real */}
-            <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-white/10 text-xs">
-              <div className="flex items-center gap-4 flex-wrap">
-                <span className="text-slate-400">
-                  Última sincronização: <strong className="text-emerald-400">{lastSyncTimestamp || 'Conectando...'}</strong>
-                </span>
-                <span className="text-slate-400">
-                  Registros unificados na base: <strong className="text-white">{logs.length}</strong>
-                </span>
-                <span className="text-slate-400">
-                  Auto-sync em background: <strong className="text-emerald-400">Ativo (30s)</strong>
-                </span>
-              </div>
-            </div>
-          </div>
-
           <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-3">
             <h2 className="text-xs font-black text-white uppercase flex items-center gap-1.5">
               <FileSpreadsheet size={15} className="text-emerald-400" />
@@ -940,229 +948,16 @@ export default function ManagementModule({
                 Salvar URL
               </button>
             </div>
-
-            {/* IMPORTAR REGRAS */}
-            <div className="pt-2 border-t border-white/10 mt-2">
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    const { importarRegrasPlanilha } = await import('../utils/importRules');
-                    // For demo purposes, we might use a predefined CSV URL or prompt the user.
-                    // For now, let's use a prompt if they want a specific URL, or fallback to the provided apiUrl.
-                    const csvUrl = prompt('Insira a URL do CSV publicado (Regras de Validação):', '');
-                    if (csvUrl) {
-                      const regras = await importarRegrasPlanilha(csvUrl);
-                      await saveState('regras_validacao_reabastecimento', regras);
-                      onAddToast(`Sucesso! ${regras.length} regras importadas e salvas offline.`, 'var(--color-success)');
-                    }
-                  } catch (err: any) {
-                    onAddToast(`Erro ao importar regras: ${err.message}`, 'var(--color-danger)');
-                  }
-                }}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase rounded-xl cursor-pointer shadow-md transition-all flex items-center gap-2"
-              >
-                <Download size={14} />
-                Importar Regras de Validação (CSV)
-              </button>
-            </div>
-
-            {lastSyncTimestamp && (
-              <p className="text-[0.68rem] text-emerald-400">
-                Última sincronização bem-sucedida às {lastSyncTimestamp}
-              </p>
-            )}
-          </div>
-
-          {/* Configuração do Descanso de Tela (Screensaver) */}
-          <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-4 font-mono">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="space-y-0.5">
-                <h2 className="text-xs font-black text-white uppercase flex items-center gap-1.5">
-                  <Moon size={15} className={screensaverEnabled ? 'text-purple-400' : 'text-slate-400'} />
-                  <span>Descanso de Tela / Economia de Energia</span>
-                </h2>
-                <p className="text-[0.65rem] text-slate-400">
-                  Controle a inatividade automática para coletores Zebra e terminais de operação.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => updateScreensaverEnabled(!screensaverEnabled, onAddToast)}
-                className={`px-4 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-2 cursor-pointer transition-all ${
-                  screensaverEnabled 
-                    ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/25' 
-                    : 'bg-slate-900 border border-white/20 text-slate-400 hover:text-white'
-                }`}
-              >
-                <Moon size={14} className={screensaverEnabled ? 'text-white' : 'text-slate-400'} />
-                <span>{screensaverEnabled ? 'ATIVADO' : 'DESATIVADO'}</span>
-              </button>
-            </div>
-
-            <div className="border-t border-white/10 pt-3 space-y-2">
-              <label className="text-[0.65rem] font-bold text-slate-300 uppercase flex items-center gap-1.5">
-                <Clock size={12} className="text-emerald-400" />
-                <span>Tempo de Inatividade para Disparar:</span>
-              </label>
-
-              <div className="flex items-center flex-wrap gap-1.5">
-                {[1, 2, 5, 10, 15, 30].map(mins => (
-                  <button
-                    key={mins}
-                    type="button"
-                    disabled={!screensaverEnabled}
-                    onClick={() => updateScreensaverTimeout(mins, onAddToast)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                      screensaverTimeout === mins && screensaverEnabled
-                        ? 'bg-emerald-500 text-black font-black shadow-md'
-                        : 'bg-slate-900 border border-white/10 text-slate-300 hover:text-white'
-                    }`}
-                  >
-                    {mins} {mins === 1 ? 'minuto' : 'minutos'}
-                  </button>
-                ))}
-              </div>
-
-              <p className="text-[0.6rem] text-slate-500 pt-1">
-                {screensaverEnabled 
-                  ? `O protetor de tela será acionado após ${screensaverTimeout} minutos sem interação do usuário.` 
-                  : 'O protetor de tela está completamente DESATIVADO. O aplicativo nunca bloqueará a tela automaticamente.'}
-              </p>
-            </div>
-          </div>
-
-          {/* Card Executivo de Ajuda e Integração com Google Sheets */}
-          <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 to-slate-950 border border-emerald-500/20 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 text-emerald-400">
-                <FileSpreadsheet size={18} />
-                <h3 className="text-xs font-black uppercase tracking-wider font-mono">
-                  Instruções & Script do Google Sheets
-                </h3>
-              </div>
-              <p className="text-xs text-slate-400 max-w-xl">
-                O código de integração e o passo a passo completo estão centralizados no Manual de Ajuda para manter as telas limpas para o operador.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                setHelpModalTab('sheets');
-                setShowHelpModal(true);
-              }}
-              className="px-4 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold font-mono uppercase flex items-center gap-2 cursor-pointer transition-all shrink-0"
-            >
-              <FileSpreadsheet size={15} />
-              <span>Ver Script & Passo a Passo</span>
-            </button>
           </div>
         </div>
       )}
 
-      {/* 6. CONTEÚDO DA SUB-VISÃO: CONEXÃO SITE EXTERNO & TORRE TV */}
-      {activeSubView === 'externo' && (
-        <div className="space-y-6 animate-fade-in">
-          {/* Banner de Introdução */}
-          <div className="p-5 rounded-2xl bg-gradient-to-r from-cyan-950/60 to-slate-950 border border-cyan-500/30 shadow-lg space-y-2">
-            <div className="flex items-center gap-2 text-cyan-400">
-              <Globe size={18} />
-              <h2 className="text-sm font-black uppercase tracking-wider font-mono">
-                Conexão da Aba Gestão com Sites Externos & Painéis de TV
-              </h2>
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Exiba os dados de <strong>Reabastecimento em tempo real</strong> em qualquer site externo, portal corporativo, intranet ou televisores de torre de controle em <strong>modo somente leitura (Read-Only)</strong>.
-            </p>
-          </div>
-
-          {/* Card Modo TV */}
-          <div className="p-5 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
-              <div className="space-y-0.5">
-                <h3 className="text-xs font-black text-white uppercase flex items-center gap-2 font-mono">
-                  <Tv size={15} className="text-cyan-400" />
-                  <span>Modo Standalone / Televisores de Torre</span>
-                </h3>
-                <p className="text-[0.65rem] text-slate-400">
-                  URL direta para exibição em tela cheia na torre de controle ou embutir em portais.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <a
-                  href={`${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}?view=gestao&standalone=true`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-1.5 bg-slate-900 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer font-mono"
-                >
-                  <ExternalLink size={13} />
-                  <span>Testar em Nova Aba</span>
-                </a>
-              </div>
-            </div>
-
-            {/* Link Direto */}
-            <div className="space-y-1.5">
-              <label className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                URL Standalone (Modo TV / Somente Gestão):
-              </label>
-              <div className="flex items-center gap-2 bg-slate-900 p-2.5 rounded-xl border border-white/10">
-                <input
-                  type="text"
-                  readOnly
-                  value={`${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}?view=gestao&standalone=true`}
-                  className="bg-transparent text-xs text-cyan-300 focus:outline-none w-full font-mono select-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleCopy(`${window.location.origin + window.location.pathname}?view=gestao&standalone=true`, 'url')}
-                  className="px-3 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all shrink-0 font-mono"
-                >
-                  {copiedType === 'url' ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
-                  <span>{copiedType === 'url' ? 'Copiado!' : 'Copiar URL'}</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <span className="text-[0.65rem] text-slate-400">Precisa do código HTML do iframe ou da API de integração?</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setHelpModalTab('tv');
-                  setShowHelpModal(true);
-                }}
-                className="text-xs text-cyan-400 hover:text-cyan-300 font-bold font-mono underline cursor-pointer flex items-center gap-1"
-              >
-                <span>Ver códigos na Central de Ajuda</span>
-                <ChevronRight size={13} />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 7. CONTEÚDO DA SUB-VISÃO: PERFORMANCE & DIAGNÓSTICO */}
+      {/* 9. Diagnóstico */}
       {activeSubView === 'diagnostico' && (
         <DiagnosticsTelemetryView />
       )}
 
-      {/* 8. CONTEÚDO DA SUB-VISÃO: SUPABASE */}
-      {activeSubView === 'supabase' && (
-        <div className="space-y-4">
-          <SupabaseConfigModule />
-        </div>
-      )}
-
-      {/* 9. CONTEÚDO DA SUB-VISÃO: FOLLOW-UP (PRODUTIVIDADE) */}
-      {activeSubView === 'followup' && (
-        <ProductivityFollowup events={eventsList} />
-      )}
-
-      {/* MODAL DE AJUDA & DOCUMENTAÇÃO */}
+      {/* MODAL DE AJUDA */}
       <HelpSupportModal
         isOpen={showHelpModal}
         onClose={() => setShowHelpModal(false)}
