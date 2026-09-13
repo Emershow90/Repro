@@ -7,7 +7,6 @@ on:
       - '**.md'
       - 'docs/**'
       - '.gitignore'
-      - '.editorconfig'
       - 'LICENSE'
   workflow_dispatch:
     inputs:
@@ -25,7 +24,7 @@ concurrency:
 
 jobs:
   # =========================================================================
-  # JOB 1 — Verificação (typecheck, lint, test) + build web
+  # JOB 1 — Verify + Build
   # =========================================================================
   verify:
     runs-on: ubuntu-latest
@@ -41,7 +40,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        # --ignore-scripts pula a compilação nativa do odbc (não é usada no cliente)
+        # --ignore-scripts pula compilação nativa do odbc (não usada no cliente)
         run: npm ci --ignore-scripts
 
       - name: Validate lockfile
@@ -72,7 +71,7 @@ jobs:
       - name: Verify SPA fallback
         run: |
           if [ ! -f dist/404.html ]; then
-            echo "❌ dist/404.html ausente (SPA routing vai quebrar)"
+            echo "❌ dist/404.html ausente — SPA routing vai quebrar em produção"
             exit 1
           fi
           echo "✅ 404.html presente"
@@ -82,8 +81,10 @@ jobs:
           REPO="${{ github.event.repository.name }}"
           if ! grep -q "/${REPO}/assets" dist/index.html; then
             echo "❌ Assets não usam base path /${REPO}/"
-            echo "--- Amostra do index.html ---"
+            echo "--- Amostra ---"
             grep -o 'src="[^"]*"' dist/index.html | head -3 || true
+            echo ""
+            echo "Corrija vite.config.ts: base = '/${REPO}/' quando GITHUB_ACTIONS=true"
             exit 1
           fi
           echo "✅ Base path /${REPO}/ OK"
@@ -99,7 +100,7 @@ jobs:
           retention-days: 1
 
   # =========================================================================
-  # JOB 2 — Deploy para gh-pages + smoke test
+  # JOB 2 — Deploy + Smoke test
   # =========================================================================
   deploy:
     needs: verify
