@@ -11,6 +11,9 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
     "forceConsistentCasingInFileNames": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
 
     "isolatedModules": true,
     "verbatimModuleSyntax": false,
