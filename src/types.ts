@@ -77,11 +77,11 @@ export interface ActiveSession {
    * Union discriminada: quando `ativo === true`, `iniciadoEm` é obrigatório.
    * Evita o bug de `Date.now() - undefined → NaN`.
    */
-  cronometro:
-    | { ativo: false; tempoAcumuladoMs: number; iniciadoEm?: undefined }
-    | { ativo: true; tempoAcumuladoMs: number; iniciadoEm: number };
-  atualizadoEm: number;
-}
+  cronometro: {
+    ativo: boolean;
+    iniciadoEm?: number;
+    tempoAcumuladoMs: number;
+  };
 
 // -------------------------------------------------------------
 // Eventos Operacionais
