@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -36,20 +36,22 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Run Typecheck & Lint
-        run: npm run lint
+      - name: Run Quality Checks
+        run: npm run typecheck && npm run lint
 
       - name: Build Application
         run: npm run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # Injeta automaticamente a URL base do GitHub Pages
+          VITE_APP_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
 
       - name: Prepare SPA for GitHub Pages
         run: |
-          # Copy index.html to 404.html for client-side SPA routing fallback
+          # Copy index.html to 404.html para fallback de rotas SPA
           cp dist/index.html dist/404.html
-          # Prevent Jekyll from ignoring files beginning with _
+          # Previne Jekyll de ignorar arquivos que começam com _
           touch dist/.nojekyll
 
       - name: Setup GitHub Pages
@@ -63,10 +65,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-      - name: Fallback Deploy to gh-pages Branch
-        uses: JamesIves/github-pages-deploy-action@v4
-        continue-on-error: true
-        with:
-          folder: dist
-          branch: gh-pages
