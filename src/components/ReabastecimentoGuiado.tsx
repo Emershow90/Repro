@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { enqueueOperationalEvent } from '../dbLocal';
+import { publishOperationalEvent } from '../utils/supabase/publishEvent';
 import { Coffee, Zap, AlertOctagon, ArrowRight, User } from 'lucide-react';
 import { useRuleStore } from '../stores/ruleStore';
 import { usePresenceStore } from '../stores/presenceStore';
@@ -145,6 +146,21 @@ export const ReabastecimentoGuiado: React.FC = () => {
           justification: 'Iniciou reabastecimento'
         };
         await enqueueOperationalEvent(startEvent as any);
+        // Publicar para Gestão Remota (fire-and-forget)
+        publishOperationalEvent({
+          id: startEvent.id,
+          timestamp: startEvent.timestamp,
+          tipo: startEvent.tipo,
+          session_id: startEvent.sessionId,
+          setor: startEvent.setor,
+          rua: startEvent.rua,
+          colaborador: startEvent.colaborador,
+          endereco: startEvent.endereco,
+          status: startEvent.status,
+          enderecos_delta: 0,
+          volumes_delta: 0,
+          justification: startEvent.justification,
+        });
       }
     } else {
       const qtdInput = parseInt(newData.quantidade, 10);
@@ -178,6 +194,19 @@ export const ReabastecimentoGuiado: React.FC = () => {
             justification: `Divergência Art ${newData.artigo}. Lida: ${qtdInput}, Esperada: ${rule?.quantidadePadrao}`
         };
         await enqueueOperationalEvent(event as any);
+        // Publicar para Gestão Remota
+        publishOperationalEvent({
+          id: event.id,
+          timestamp: event.timestamp,
+          tipo: event.tipo,
+          session_id: event.sessionId,
+          setor: event.setor,
+          rua: event.rua,
+          colaborador: 'Operador_X',
+          enderecos_delta: 0,
+          volumes_delta: 0,
+          justification: event.justification,
+        });
         return; // Permite o usuário corrigir o input de quantidade
       } else { 
          playSound('success');
@@ -193,11 +222,26 @@ export const ReabastecimentoGuiado: React.FC = () => {
             rua: newData.endereco.substring(0,4) || 'UNK',
             enderecosDelta: 1,
             volumesDelta: qtdInput || 0,
-            status: 'synced', // Tells realtime that this address is done
+            status: 'synced',
             endereco: newData.endereco,
             justification: `Fluxo Sequencial: End ${newData.endereco} | Art ${newData.artigo}`
         };
         await enqueueOperationalEvent(event as any);
+        // Publicar para Gestão Remota
+        publishOperationalEvent({
+          id: event.id,
+          timestamp: event.timestamp,
+          tipo: event.tipo,
+          session_id: event.sessionId,
+          setor: event.setor,
+          rua: event.rua,
+          colaborador: 'Operador_X',
+          endereco: event.endereco,
+          status: event.status,
+          enderecos_delta: event.enderecosDelta,
+          volumes_delta: event.volumesDelta,
+          justification: event.justification,
+        });
          
         if (tarefaStartTime) {
           const timeElapsed = Math.floor((Date.now() - tarefaStartTime) / 1000); // seconds
@@ -222,6 +266,17 @@ export const ReabastecimentoGuiado: React.FC = () => {
             }
           };
           await enqueueOperationalEvent(mlEvent as any);
+          // Publicar evento ML para Gestão Remota
+          publishOperationalEvent({
+            id: mlEvent.id,
+            timestamp: mlEvent.timestamp,
+            tipo: mlEvent.tipo,
+            session_id: mlEvent.sessionId,
+            setor: mlEvent.setor,
+            rua: mlEvent.rua,
+            colaborador: mlEvent.colaborador,
+            ml_data: mlEvent.mlData,
+          });
         }
 
         // O PULO DO GATO: Modo Desmembramento

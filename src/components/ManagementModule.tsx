@@ -1,69 +1,73 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- *
- * Painel de Gestão & Consolidação REPRO
- *
- * ESTADO ATUAL (pós-Fase 2):
- *  - Batch (triggerManualSync / initializeAutoSync) DESLIGADO até Code.gs v2
- *    + Fase 3 estarem prontos. Enquanto isso, "Sincronizar Agora" delega para
- *    o caminho singular do App.tsx (onTriggerSync → syncMultiDevice).
- *  - Quando o Code.gs v2 estiver estável em produção:
- *      1. Corrigir stopAutoSync no syncOrchestrator (removeEventListener)
- *      2. Religar o useEffect de initializeAutoSync (bloco comentado abaixo)
- *      3. Trocar handleSyncToSheets para usar triggerManualSync
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import {
-  Log,
-  ReproDemand,
-  ActiveSession,
-  OperationalEvent,
+import { 
+  Log, 
+  ReproDemand, 
+  ActiveSession, 
+  OperationalEvent, 
   StreetSummary,
+  SyncEventPayload 
 } from '../types';
-import {
-  FileSpreadsheet,
-  Layers,
-  Clock,
-  RefreshCw,
-  Send,
-  Search,
-  Activity,
+import { 
+  FileSpreadsheet, 
+  Layers, 
+  TrendingUp, 
+  Clock, 
+  RefreshCw, 
+  CheckCircle2, 
+  AlertCircle, 
+  Send, 
+  Download, 
+  Filter, 
+  Search, 
+  Activity, 
+  ShieldCheck, 
   RotateCw,
+  ExternalLink,
+  ChevronRight,
   Database,
   MapPin,
-  Zap,
-  BarChart3,
+  Flame,
+  Award,
+  CheckCheck,
+  Moon,
+  Wifi,
+  WifiOff,
+  Laptop,
+  Smartphone,
+  Radio,
+  Globe,
+  Tv,
+  Code,
+  Copy,
+  Check
 } from 'lucide-react';
-import {
-  formatDateToBR,
-  parseDateString,
-  getWeekNumber,
+import { 
+  formatDateToBR, 
+  parseDateString, 
+  getDayOfWeekName, 
+  getWeekNumber 
 } from '../utils/dateUtils';
-import {
-  SECTOR_87_STREETS,
-  SECTOR_88_STREETS,
-  SECTOR_89_STREETS,
-  SECTOR_90_STREETS,
+import { 
+  SECTOR_87_STREETS, 
+  SECTOR_88_STREETS, 
+  SECTOR_89_STREETS, 
+  SECTOR_90_STREETS, 
   ALL_CONFIGURED_STREETS,
-  inferSectorFromStreet,
+  inferSectorFromStreet 
 } from '../data/streetData';
-import {
-  getState,
-  saveState,
-  getOperationalSyncQueue,
-} from '../dbLocal';
-// Batch sync — desligado até Fase 3. Quando religar, descomentar:
-// import {
-//   initializeAutoSync,
-//   stopAutoSync,
-//   triggerManualSync,
-// } from '../utils/syncOrchestrator';
-import { getLastSyncMetrics, SyncMetrics } from '../utils/syncOrchestrator';
+import { getState, saveState, getOperationalSyncQueue, clearOperationalSyncQueue } from '../dbLocal';
+import { postBatchToGoogleSheets } from '../sheetService';
 import DiagnosticsTelemetryView from './DiagnosticsTelemetryView';
 import OdbcQueryBridge from './OdbcQueryBridge';
+import SupabaseConfigModule from './SupabaseConfigModule';
 import HelpSupportModal from './HelpSupportModal';
+import ProductivityFollowup from './ProductivityFollowup';
+import { calculateProductivityMetrics } from '../productivityHelper';
 import { useUIStore } from '../stores/uiStore';
 import { useSupabaseRealtime } from '../hooks/useSupabaseRealtime';
 
@@ -83,14 +87,6 @@ const STORAGE_DEMANDS_KEY = 'repro_demands_v5';
 const STORAGE_ACTIVE_SESSION_KEY = 'repro_active_session_organism_v5';
 const STORAGE_EVENTS_KEY = 'repro_operational_events_v5';
 
-type SubView =
-  | 'resumo'
-  | 'eventos'
-  | 'odbc'
-  | 'sheets'
-  | 'diagnostico'
-  | 'relatorios';
-
 export default function ManagementModule({
   logs,
   activeSectorId,
@@ -100,11 +96,9 @@ export default function ManagementModule({
   lastSyncTimestamp: externalLastSync,
   isSyncing: externalIsSyncing,
   onTriggerSync,
-  networkStatus = 'online',
+  networkStatus = 'online'
 }: ManagementModuleProps) {
-  // ---------------------------------------------------------------------------
   // Filtros
-  // ---------------------------------------------------------------------------
   const [selectedDate, setSelectedDate] = useState(() => {
     const today = new Date();
     const y = today.getFullYear();
@@ -115,104 +109,76 @@ export default function ManagementModule({
 
   const [selectedSector, setSelectedSector] = useState<string>('TODOS');
   const [searchFilter, setSearchFilter] = useState('');
-  const [activeSubView, setActiveSubView] = useState<SubView>('resumo');
+  const [activeSubView, setActiveSubView] = useState<'resumo' | 'eventos' | 'odbc' | 'repro' | 'sheets' | 'externo' | 'diagnostico' | 'supabase' | 'followup'>('resumo');
 
-  const { screensaverEnabled, screensaverTimeout, updateScreensaverEnabled, updateScreensaverTimeout } =
-    useUIStore();
+  const {
+    screensaverEnabled,
+    screensaverTimeout,
+    updateScreensaverEnabled,
+    updateScreensaverTimeout
+  } = useUIStore();
 
-  // ---------------------------------------------------------------------------
   // Estados locais recuperados do IndexedDB
-  // ---------------------------------------------------------------------------
   const [demands, setDemands] = useState<Record<string, ReproDemand>>({});
   const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
   const [eventsList, setEventsList] = useState<OperationalEvent[]>([]);
-  const [syncQueueItems, setSyncQueueItems] = useState<OperationalEvent[]>([]);
+  const [syncQueueItems, setSyncQueueItems] = useState<any[]>([]);
 
   // Sincronização
   const [isSyncingSheets, setIsSyncingSheets] = useState(false);
   const [internalLastSync, setInternalLastSync] = useState<string | null>(null);
-  const [syncMetrics, setSyncMetrics] = useState<SyncMetrics | null>(null);
-  const [syncProgressMsg, setSyncProgressMsg] = useState<string>('');
   const lastSyncTimestamp = externalLastSync || internalLastSync;
   const isCurrentlySyncing = Boolean(externalIsSyncing || isSyncingSheets);
+  const [syncLogsResult, setSyncLogsResult] = useState<{ success: number; errors: number } | null>(null);
 
+  const [copiedType, setCopiedType] = useState<string | null>(null);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [helpModalTab, setHelpModalTab] = useState<'manual' | 'sheets' | 'tv' | 'sql'>('sheets');
 
-  // ---------------------------------------------------------------------------
   // Carregar dados locais do IndexedDB
-  // ---------------------------------------------------------------------------
   const loadLocalData = useCallback(async () => {
     try {
-      const [savedDemands, savedSession, savedEvents, queue, metrics] = await Promise.all([
+      const [savedDemands, savedSession, savedEvents, queue] = await Promise.all([
         getState<Record<string, ReproDemand>>(STORAGE_DEMANDS_KEY),
         getState<ActiveSession>(STORAGE_ACTIVE_SESSION_KEY),
         getState<OperationalEvent[]>(STORAGE_EVENTS_KEY),
-        getOperationalSyncQueue(),
-        getLastSyncMetrics(),
+        getOperationalSyncQueue()
       ]);
 
       if (savedDemands) setDemands(savedDemands);
       if (savedSession) setActiveSession(savedSession);
       if (savedEvents) setEventsList(savedEvents);
       if (queue) setSyncQueueItems(queue);
-      if (metrics) setSyncMetrics(metrics);
     } catch (err) {
       console.warn('Erro ao carregar dados do IndexedDB no Painel de Gestão', err);
     }
   }, []);
 
-  // Supabase Realtime
+  // Supabase Realtime Hook integration
   const { payloads, isConnected } = useSupabaseRealtime('operational_events');
 
   useEffect(() => {
     if (payloads.length > 0) {
+      const latest = payloads[payloads.length - 1];
       onAddToast(`📡 Evento em tempo real recebido!`, 'var(--color-info)');
       loadLocalData();
     }
   }, [payloads, onAddToast, loadLocalData]);
 
-  // Polling local — só roda quando a aba está visível
+  const handleCopy = (text: string, type: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedType(type);
+    onAddToast('Copiado para a área de transferência!', 'var(--color-success)');
+    setTimeout(() => setCopiedType(null), 3000);
+  };
+
   useEffect(() => {
     loadLocalData();
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        loadLocalData();
-      }
-    }, 3000);
+    const interval = setInterval(loadLocalData, 3000); // Polling leve a cada 3s para acompanhar o PDT ao vivo
     return () => clearInterval(interval);
   }, [loadLocalData]);
 
-  // ---------------------------------------------------------------------------
-  // Batch sync — DESLIGADO até Code.gs v2 + Fase 3
-  //
-  // Motivos do desligamento:
-  //  1. Code.gs v1 não processa payload batch → escreve zeros na planilha
-  //  2. initializeAutoSync vaza listener de window.focus a cada render
-  //     (deps [apiUrl, networkStatus, logs, demands, eventsList] são voláteis)
-  //  3. stopAutoSync não remove o listener de focus (bug no orchestrator)
-  //
-  // Para religar (após Fase 3):
-  //  1. Corrigir syncOrchestrator.stopAutoSync para guardar e remover o handler
-  //  2. Trocar deps para [apiUrl, networkStatus]
-  //  3. Usar refs para logs/demands/eventsList (não colocar no array de deps)
-  //
-  // useEffect(() => {
-  //   if (apiUrl && networkStatus === 'online') {
-  //     initializeAutoSync({
-  //       apiUrl,
-  //       logs,
-  //       streetSummaries: streetSummaries || [],
-  //       demands,
-  //       events: eventsList,
-  //     });
-  //     return () => stopAutoSync();
-  //   }
-  // }, [apiUrl, networkStatus]);
-  // ---------------------------------------------------------------------------
-
-  // ---------------------------------------------------------------------------
   // Lista de ruas do setor filtrado
-  // ---------------------------------------------------------------------------
   const filteredStreets = useMemo(() => {
     let list = ALL_CONFIGURED_STREETS;
     if (selectedSector === '87') list = SECTOR_87_STREETS;
@@ -222,28 +188,20 @@ export default function ManagementModule({
 
     if (searchFilter.trim()) {
       const q = searchFilter.trim().toUpperCase();
-      list = list.filter((r) => r.includes(q));
+      list = list.filter(r => r.includes(q));
     }
     return list;
   }, [selectedSector, searchFilter]);
 
-  // Data alvo em formato BR
+  // Realizado consolidado do dia selecionado a partir dos Logs
   const targetDateBR = useMemo(() => {
     const p = parseDateString(selectedDate) || new Date();
     return formatDateToBR(p);
   }, [selectedDate]);
 
-  // Semana do ano — usa Date (não string BR)
-  const targetWeekNumber = useMemo(() => {
-    const p = parseDateString(selectedDate) || new Date();
-    return getWeekNumber(p);
-  }, [selectedDate]);
-
-  // ---------------------------------------------------------------------------
-  // Resumo analítico por rua
-  // ---------------------------------------------------------------------------
+  // Resumo analítico calculado por rua
   const streetSummaries: StreetSummary[] = useMemo(() => {
-    return filteredStreets.map((rua) => {
+    return filteredStreets.map(rua => {
       const setor = inferSectorFromStreet(rua);
       const demandKey = `${selectedDate}_${setor}_${rua}`;
       const demandObj = demands[demandKey];
@@ -251,7 +209,8 @@ export default function ManagementModule({
       const demanda = demandObj && demandObj.demandaCalculada > 0 ? demandObj.demandaCalculada : null;
       const unidade = demandObj ? demandObj.unidade : null;
 
-      const streetLogs = logs.filter((l) => {
+      // Soma de volumes dos logs já gravados na data
+      const streetLogs = logs.filter(l => {
         const act = (l.atividade || '').toUpperCase();
         const r = (l.rua || act.replace(/REABASTECIMENTO\s*-\s*/i, '')).trim().toUpperCase();
         return l.data === targetDateBR && r === rua;
@@ -261,22 +220,22 @@ export default function ManagementModule({
       const totalEnderecosLogs = streetLogs.reduce((acc, l) => acc + (Number(l.enderecos) || 0), 0);
       const totalHorasLogs = streetLogs.reduce((acc, l) => acc + (Number(l.horas) || 0), 0);
 
+      // Se a rua for a que está ativa no coletor neste momento, soma o temporário
       const isLiveNow = activeSession && activeSession.rua === rua && activeSession.data === selectedDate;
-      const liveVolumes = isLiveNow ? activeSession.volumes || 0 : 0;
-      const liveEnderecos = isLiveNow ? activeSession.enderecos || 0 : 0;
+      const liveVolumes = isLiveNow ? (activeSession.volumes || 0) : 0;
+      const liveEnderecos = isLiveNow ? (activeSession.enderecos || 0) : 0;
       const liveSecs = isLiveNow ? (activeSession.cronometro?.tempoAcumuladoMs || 0) / 1000 : 0;
 
       const realizado = totalVolumesLogs + liveVolumes;
       const enderecos = totalEnderecosLogs + liveEnderecos;
-      const tempoTotalSegundos = totalHorasLogs * 3600 + liveSecs;
+      const tempoTotalSegundos = (totalHorasLogs * 3600) + liveSecs;
       const totalHorasCalculadas = tempoTotalSegundos / 3600;
 
-      const pendente = demanda !== null ? Math.max(0, demanda - realizado) : null;
-      const excedente = demanda !== null ? Math.max(0, realizado - demanda) : 0;
-      const coberturaPercent =
-        demanda !== null && demanda > 0
-          ? Number(((realizado / demanda) * 100).toFixed(1))
-          : null;
+      const pendente = (demanda !== null) ? Math.max(0, demanda - realizado) : null;
+      const excedente = (demanda !== null) ? Math.max(0, realizado - demanda) : 0;
+      const coberturaPercent = (demanda !== null && demanda > 0)
+        ? Number(((realizado / demanda) * 100).toFixed(1))
+        : null;
 
       const eph = totalHorasCalculadas > 0 ? (enderecos / totalHorasCalculadas).toFixed(1) : '0.0';
       const vph = totalHorasCalculadas > 0 ? (realizado / totalHorasCalculadas).toFixed(1) : '0.0';
@@ -303,14 +262,12 @@ export default function ManagementModule({
         tempoTotalSegundos,
         eph,
         vph,
-        status,
+        status
       };
     });
   }, [filteredStreets, selectedDate, demands, logs, targetDateBR, activeSession]);
 
-  // ---------------------------------------------------------------------------
-  // Totais gerais
-  // ---------------------------------------------------------------------------
+  // Totais Gerais do Dashboard
   const totals = useMemo(() => {
     let totalDemanda = 0;
     let totalRealizado = 0;
@@ -318,7 +275,7 @@ export default function ManagementModule({
     let totalSegundos = 0;
     let ruasAtendidas = 0;
 
-    streetSummaries.forEach((s) => {
+    streetSummaries.forEach(s => {
       if (s.demanda !== null) totalDemanda += s.demanda;
       totalRealizado += s.realizado;
       totalEnderecos += s.enderecos;
@@ -329,8 +286,7 @@ export default function ManagementModule({
     const totalHoras = totalSegundos / 3600;
     const ephGlobal = totalHoras > 0 ? (totalEnderecos / totalHoras).toFixed(1) : '0.0';
     const vphGlobal = totalHoras > 0 ? (totalRealizado / totalHoras).toFixed(1) : '0.0';
-    const coberturaGlobal =
-      totalDemanda > 0 ? Number(((totalRealizado / totalDemanda) * 100).toFixed(1)) : 0;
+    const coberturaGlobal = totalDemanda > 0 ? Number(((totalRealizado / totalDemanda) * 100).toFixed(1)) : 0;
     const saldoPendenteGlobal = Math.max(0, totalDemanda - totalRealizado);
 
     return {
@@ -342,13 +298,11 @@ export default function ManagementModule({
       coberturaGlobal,
       saldoPendenteGlobal,
       ruasAtendidas,
-      totalRuas: streetSummaries.length,
+      totalRuas: streetSummaries.length
     };
   }, [streetSummaries]);
 
-  // ---------------------------------------------------------------------------
-  // Sincronização — delega para o caminho singular do App.tsx
-  // ---------------------------------------------------------------------------
+  // Sincronização com o Google Sheets (Consolidação em Lote)
   const handleSyncToSheets = async () => {
     if (!apiUrl || !apiUrl.startsWith('http')) {
       onAddToast('Configure a URL da API do Google Sheets nas opções.', 'var(--color-danger)');
@@ -356,66 +310,47 @@ export default function ManagementModule({
     }
 
     setIsSyncingSheets(true);
-    setSyncProgressMsg('');
+    setSyncLogsResult(null);
 
     try {
-      // Fase 2: delega para syncMultiDevice do App (canal singular, compatível com Code.gs v1).
-      // Fase 3: substituir por triggerManualSync quando Code.gs v2 estiver estável.
-      if (onTriggerSync) {
-        await onTriggerSync();
-        onAddToast('✨ Sincronização concluída!', 'var(--color-success)');
+      const queue = await getOperationalSyncQueue();
+      const produtividadeData = calculateProductivityMetrics(eventsList, targetDateBR.split('/').reverse().join('-'));
+      
+      const payloadBatch = {
+        tipo: 'SYNC_BATCH_REPRO',
+        data: targetDateBR,
+        timestamp: Date.now(),
+        resumo: streetSummaries,
+        produtividade: produtividadeData,
+        eventos: queue.slice(0, 50) // Envia lote de até 50 eventos pendentes
+      };
+
+      const isSuccess = await postBatchToGoogleSheets(apiUrl, payloadBatch);
+
+      if (isSuccess) {
+        const processedIds = queue.slice(0, 50).map(e => e.id);
+        await clearOperationalSyncQueue(processedIds);
+        setSyncQueueItems(await getOperationalSyncQueue());
+
+        setInternalLastSync(new Date().toLocaleTimeString('pt-BR'));
+        setSyncLogsResult({ success: streetSummaries.length, errors: 0 });
+        onAddToast(`Dados consolidados enviados com sucesso para o Google Sheets!`, 'var(--color-success)');
       } else {
-        onAddToast('Sincronização não disponível.', 'var(--color-warning)');
+        throw new Error('Falha no envio para o Google Sheets. Verifique o link e permissões do Google Apps Script.');
       }
     } catch (err: any) {
-      console.error('Erro na sincronização:', err);
-      onAddToast(`Erro ao sincronizar: ${err.message}`, 'var(--color-danger)');
+      console.error('Erro de sincronização com o Sheets', err);
+      onAddToast('Erro ao sincronizar com Google Sheets. Os dados permanecem seguros no IndexedDB.', 'var(--color-danger)');
+      setSyncLogsResult({ success: 0, errors: 1 });
     } finally {
       setIsSyncingSheets(false);
-      setSyncProgressMsg('');
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Salvar demanda de uma rua
-  // ---------------------------------------------------------------------------
-  const handleSaveDemand = async (summary: StreetSummary) => {
-    const currentVal = summary.demanda !== null ? String(summary.demanda) : '';
-    const valStr = prompt(
-      `Definir Demanda REPRO para a Rua ${summary.rua} (Setor ${summary.setor}):`,
-      currentVal,
-    );
-    if (valStr === null) return;
-
-    const num = parseFloat(valStr.replace(',', '.'));
-    if (isNaN(num) || num < 0) {
-      onAddToast('Valor inválido.', 'var(--color-danger)');
-      return;
-    }
-
-    const key = `${selectedDate}_${summary.setor}_${summary.rua}`;
-    const updated = {
-      ...demands,
-      [key]: {
-        id: `dem_${Date.now()}`,
-        data: selectedDate,
-        setor: summary.setor,
-        rua: summary.rua,
-        demandaCalculada: num,
-        unidade: summary.unidade || 'CAIXAS',
-      },
-    };
-    setDemands(updated);
-    await saveState(STORAGE_DEMANDS_KEY, updated);
-    onAddToast(`Demanda de ${num} salva para ${summary.rua}!`, 'var(--color-success)');
-  };
-
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
   return (
     <div className="w-full space-y-5 font-mono text-slate-200">
-      {/* BARRA SUPERIOR */}
+      
+      {/* 1. BARRA SUPERIOR DE FILTRO & CONTROLO DE GESTÃO */}
       <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-xl flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -426,12 +361,14 @@ export default function ManagementModule({
               Painel de Gestão & Consolidação REPRO
             </h1>
             <p className="text-[0.68rem] text-slate-400">
-              Sincronização centralizada: Sheets + Supabase + Relatórios Unificados
+              Acompanhamento operacional, auditoria de eventos e integração com Google Sheets
             </p>
           </div>
         </div>
 
+        {/* Filtros de Data e Setor */}
         <div className="flex items-center gap-2 flex-wrap ml-auto">
+          {/* Data */}
           <div className="flex items-center gap-1 bg-slate-900 px-2.5 py-1.5 rounded-xl border border-white/15">
             <Clock size={13} className="text-emerald-400" />
             <input
@@ -442,8 +379,9 @@ export default function ManagementModule({
             />
           </div>
 
+          {/* Setores */}
           <div className="flex items-center bg-slate-900 p-0.5 rounded-xl border border-white/15">
-            {['TODOS', '87', '88', '89', '90'].map((sec) => (
+            {['TODOS', '87', '88', '89', '90'].map(sec => (
               <button
                 key={sec}
                 type="button"
@@ -459,175 +397,170 @@ export default function ManagementModule({
             ))}
           </div>
 
-          {syncMetrics && (
-            <div className="text-[0.65rem] font-bold text-slate-400 px-2 py-1 rounded-lg bg-slate-900/50 border border-white/10">
-              <span className="text-emerald-400">✓ {syncMetrics.lastSyncTimestamp}</span>
-            </div>
-          )}
-
+          {/* Botão Sincronizar com Planilha */}
           <button
             type="button"
             onClick={handleSyncToSheets}
-            disabled={isCurrentlySyncing}
-            className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-110 disabled:opacity-50 text-black text-xs font-black uppercase rounded-xl border border-emerald-300 shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
+            disabled={isSyncingSheets}
+            className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-110 disabled:opacity-50 text-black text-xs font-black uppercase rounded-xl border border-emerald-300 shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
           >
-            <RefreshCw size={13} className={isCurrentlySyncing ? 'animate-spin' : ''} />
-            <span>{isCurrentlySyncing ? 'Sincronizando...' : 'Sincronizar Agora'}</span>
+            <RefreshCw size={13} className={isSyncingSheets ? 'animate-spin' : ''} />
+            <span>{isSyncingSheets ? 'Enviando...' : 'Sincronizar Sheets'}</span>
           </button>
         </div>
       </div>
 
-      {syncProgressMsg && (
-        <div className="p-3 rounded-xl bg-slate-900 border border-emerald-500/30 text-emerald-300 text-xs animate-pulse">
-          {syncProgressMsg}
-        </div>
-      )}
-
-      {/* CARDS DE INDICADORES GLOBAIS */}
+      {/* 2. CARDS DE INDICADORES GLOBAIS DO TURNO */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {/* Demanda Total */}
         <div className="p-3.5 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-1">
-          <span className="text-[0.62rem] text-slate-400 uppercase font-bold block">
-            Demanda REPRO
-          </span>
-          <div className="text-xl font-black text-white">
-            {totals.totalDemanda}{' '}
-            <span className="text-xs text-slate-400 font-normal">vol/cx</span>
-          </div>
+          <span className="text-[0.62rem] text-slate-400 uppercase font-bold block">Demanda REPRO</span>
+          <div className="text-xl font-black text-white">{totals.totalDemanda} <span className="text-xs text-slate-400 font-normal">vol/cx</span></div>
           <span className="text-[0.58rem] text-slate-500 block">Total planejado para o dia</span>
         </div>
 
+        {/* Realizado Total */}
         <div className="p-3.5 rounded-2xl bg-slate-950 border border-cyan-500/30 shadow-sm space-y-1">
-          <span className="text-[0.62rem] text-cyan-400 uppercase font-bold block">
-            Realizado Físico
-          </span>
-          <div className="text-xl font-black text-cyan-300">
-            {totals.totalRealizado}{' '}
-            <span className="text-xs text-cyan-500 font-normal">vol/cx</span>
-          </div>
-          <span className="text-[0.58rem] text-slate-500 block">
-            {totals.totalEnderecos} endereços atendidos
-          </span>
+          <span className="text-[0.62rem] text-cyan-400 uppercase font-bold block">Realizado Físico</span>
+          <div className="text-xl font-black text-cyan-300">{totals.totalRealizado} <span className="text-xs text-cyan-500 font-normal">vol/cx</span></div>
+          <span className="text-[0.58rem] text-slate-500 block">{totals.totalEnderecos} endereços atendidos</span>
         </div>
 
+        {/* Saldo Pendente */}
         <div className="p-3.5 rounded-2xl bg-slate-950 border border-amber-500/30 shadow-sm space-y-1">
-          <span className="text-[0.62rem] text-amber-400 uppercase font-bold block">
-            Saldo Pendente
-          </span>
-          <div className="text-xl font-black text-amber-300">
-            {totals.saldoPendenteGlobal}{' '}
-            <span className="text-xs text-amber-500 font-normal">vol/cx</span>
-          </div>
+          <span className="text-[0.62rem] text-amber-400 uppercase font-bold block">Saldo Pendente</span>
+          <div className="text-xl font-black text-amber-300">{totals.saldoPendenteGlobal} <span className="text-xs text-amber-500 font-normal">vol/cx</span></div>
           <span className="text-[0.58rem] text-slate-500 block">Restante para cobrir o plano</span>
         </div>
 
+        {/* Cobertura Global */}
         <div className="p-3.5 rounded-2xl bg-slate-950 border border-emerald-500/30 shadow-sm space-y-1">
-          <span className="text-[0.62rem] text-emerald-400 uppercase font-bold block">
-            Cobertura Geral
-          </span>
+          <span className="text-[0.62rem] text-emerald-400 uppercase font-bold block">Cobertura Geral</span>
           <div className="text-xl font-black text-emerald-300">{totals.coberturaGlobal}%</div>
-          <span className="text-[0.58rem] text-slate-500 block">
-            {totals.ruasAtendidas} de {totals.totalRuas} ruas atendidas
-          </span>
+          <span className="text-[0.58rem] text-slate-500 block">{totals.ruasAtendidas} de {totals.totalRuas} ruas atendidas</span>
         </div>
 
+        {/* Ritmo Médio (EPH / VPH) */}
         <div className="p-3.5 rounded-2xl bg-slate-950 border border-purple-500/30 shadow-sm space-y-1 col-span-2 md:col-span-1">
-          <span className="text-[0.62rem] text-purple-400 uppercase font-bold block">
-            Produtividade Média
-          </span>
+          <span className="text-[0.62rem] text-purple-400 uppercase font-bold block">Produtividade Média</span>
           <div className="text-lg font-black text-purple-300">
-            {totals.ephGlobal}{' '}
-            <span className="text-xs font-normal text-slate-400">EPH</span> •{' '}
-            {totals.vphGlobal}{' '}
-            <span className="text-xs font-normal text-slate-400">VPH</span>
+            {totals.ephGlobal} <span className="text-xs font-normal text-slate-400">EPH</span> • {totals.vphGlobal} <span className="text-xs font-normal text-slate-400">VPH</span>
           </div>
           <span className="text-[0.58rem] text-slate-500 block">Ritmo consolidado de campo</span>
         </div>
       </div>
 
-      {/* NAVEGAÇÃO DE SUB-VISÕES */}
-      <div className="flex items-center gap-2 border-b border-white/10 pb-2 overflow-x-auto">
+      {/* 3. NAVEGAÇÃO DE SUB-VISÕES (RESUMO POR RUA / EVENTOS EM TEMPO REAL / CONFIG SHEETS) */}
+      <div className="flex items-center gap-2 border-b border-white/10 pb-2">
         <button
           type="button"
           onClick={() => setActiveSubView('resumo')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
             activeSubView === 'resumo'
               ? 'bg-emerald-500 text-black shadow-md'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
           <Activity size={14} />
-          <span>Resumo por Rua</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveSubView('relatorios')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
-            activeSubView === 'relatorios'
-              ? 'bg-blue-500 text-white shadow-md'
-              : 'text-slate-400 hover:text-white hover:bg-slate-900'
-          }`}
-        >
-          <BarChart3 size={14} />
-          <span>Relatórios Consolidados</span>
+          <span>Resumo por Rua ({streetSummaries.length})</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubView('eventos')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
             activeSubView === 'eventos'
               ? 'bg-emerald-500 text-black shadow-md'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
           <RotateCw size={14} />
-          <span>Trilha de Eventos ({syncQueueItems.length})</span>
+          <span>Trilha de Eventos & Fila Sync ({syncQueueItems.length} na fila)</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubView('odbc')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
             activeSubView === 'odbc'
-              ? 'bg-purple-500 text-white shadow-md'
+              ? 'bg-purple-500 text-white shadow-md shadow-purple-500/20 font-black'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
           <Database size={14} />
-          <span>ODBC & Auditoria</span>
+          <span>Queries SQL / ODBC & Auditoria</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubView('sheets')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
             activeSubView === 'sheets'
               ? 'bg-emerald-500 text-black shadow-md'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
           <FileSpreadsheet size={14} />
-          <span>Sheets Config</span>
+          <span>Configuração Sheets</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubView('externo')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeSubView === 'externo'
+              ? 'bg-cyan-400 text-black shadow-md shadow-cyan-500/20'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <Globe size={14} />
+          <span>Conexão Site Externo / TV</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubView('supabase')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeSubView === 'supabase'
+              ? 'bg-orange-500 text-black shadow-md'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <Database size={14} />
+          <span>Supabase (Tempo Real)</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubView('diagnostico')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
             activeSubView === 'diagnostico'
               ? 'bg-gradient-to-r from-emerald-500 to-cyan-500 text-black shadow-md'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
-          <Zap size={14} />
-          <span>Diagnóstico</span>
+          <ShieldCheck size={14} />
+          <span>Performance & Diagnóstico</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubView('followup')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeSubView === 'followup'
+              ? 'bg-blue-600 text-white shadow-md'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <TrendingUp size={14} />
+          <span>Follow-Up VPH</span>
         </button>
       </div>
 
-      {/* RESUMO POR RUA */}
+      {/* 4. CONTEÚDO DA SUB-VISÃO: RESUMO POR RUA */}
       {activeSubView === 'resumo' && (
         <div className="space-y-3">
+          {/* Campo de Busca Rápida */}
           <div className="flex items-center gap-2 bg-slate-950 p-2 rounded-xl border border-white/10 max-w-sm">
             <Search size={14} className="text-slate-400 ml-1" />
             <input
@@ -639,6 +572,7 @@ export default function ManagementModule({
             />
           </div>
 
+          {/* Tabela de Ruas */}
           <div className="overflow-x-auto rounded-2xl border border-white/15 bg-slate-950 shadow-md">
             <table className="w-full text-left text-xs font-mono">
               <thead className="bg-slate-900 text-slate-400 uppercase text-[0.62rem] border-b border-white/10">
@@ -652,6 +586,7 @@ export default function ManagementModule({
                   <th className="py-3 px-3 text-right">Cobertura</th>
                   <th className="py-3 px-3 text-right">EPH</th>
                   <th className="py-3 px-3 text-right">VPH</th>
+                  <th className="py-3 px-3 text-right">Tempo</th>
                   <th className="py-3 px-3 text-center">Ações</th>
                 </tr>
               </thead>
@@ -659,19 +594,13 @@ export default function ManagementModule({
                 {streetSummaries.map((s) => {
                   const isLive = activeSession && activeSession.rua === s.rua;
                   return (
-                    <tr
-                      key={s.rua}
-                      className={`hover:bg-slate-900/60 transition-colors ${
-                        isLive ? 'bg-emerald-500/5' : ''
-                      }`}
-                    >
-                      <td className="py-2.5 px-3 font-bold text-slate-400">Setor {s.setor}</td>
+                    <tr key={s.rua} className={`hover:bg-slate-900/60 transition-colors ${isLive ? 'bg-emerald-500/5' : ''}`}>
+                      <td className="py-2.5 px-3 font-bold text-slate-400">
+                        Setor {s.setor}
+                      </td>
 
                       <td className="py-2.5 px-3 font-black text-white flex items-center gap-1.5">
-                        <MapPin
-                          size={12}
-                          className={isLive ? 'text-emerald-400 animate-pulse' : 'text-slate-500'}
-                        />
+                        <MapPin size={12} className={isLive ? 'text-emerald-400 animate-pulse' : 'text-slate-500'} />
                         <span>{s.rua}</span>
                         {isLive && (
                           <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-[0.55rem] font-bold animate-pulse">
@@ -704,11 +633,7 @@ export default function ManagementModule({
                       </td>
 
                       <td className="py-2.5 px-3 text-right font-bold text-slate-300">
-                        {s.demanda !== null ? (
-                          `${s.demanda} ${s.unidade === 'CAIXAS' ? 'cx' : 'vol'}`
-                        ) : (
-                          <span className="text-slate-500">Não def.</span>
-                        )}
+                        {s.demanda !== null ? `${s.demanda} ${s.unidade === 'CAIXAS' ? 'cx' : 'vol'}` : <span className="text-slate-500">Não def.</span>}
                       </td>
 
                       <td className="py-2.5 px-3 text-right font-black text-cyan-300">
@@ -721,26 +646,52 @@ export default function ManagementModule({
 
                       <td className="py-2.5 px-3 text-right font-black">
                         {s.coberturaPercent !== null ? (
-                          <span
-                            className={
-                              s.coberturaPercent >= 100 ? 'text-emerald-400' : 'text-amber-400'
-                            }
-                          >
+                          <span className={s.coberturaPercent >= 100 ? 'text-emerald-400' : 'text-amber-400'}>
                             {s.coberturaPercent}%
                           </span>
-                        ) : (
-                          '---'
-                        )}
+                        ) : '---'}
                       </td>
 
-                      <td className="py-2.5 px-3 text-right text-emerald-400 font-bold">{s.eph}</td>
+                      <td className="py-2.5 px-3 text-right text-emerald-400 font-bold">
+                        {s.eph}
+                      </td>
 
-                      <td className="py-2.5 px-3 text-right text-cyan-400 font-bold">{s.vph}</td>
+                      <td className="py-2.5 px-3 text-right text-cyan-400 font-bold">
+                        {s.vph}
+                      </td>
+
+                      <td className="py-2.5 px-3 text-right text-slate-400">
+                        {new Date(s.tempoTotalSegundos * 1000).toISOString().substring(11, 19)}
+                      </td>
 
                       <td className="py-2.5 px-3 text-center">
                         <button
                           type="button"
-                          onClick={() => handleSaveDemand(s)}
+                          onClick={async () => {
+                            const currentVal = s.demanda !== null ? String(s.demanda) : '';
+                            const valStr = prompt(`Definir Demanda REPRO para a Rua ${s.rua} (Setor ${s.setor}):`, currentVal);
+                            if (valStr !== null) {
+                              const num = parseFloat(valStr.replace(',', '.'));
+                              if (!isNaN(num) && num >= 0) {
+                                const key = `${selectedDate}_${s.setor}_${s.rua}`;
+                                const updated = {
+                                  ...demands,
+                                  [key]: {
+                                    id: `dem_${Date.now()}`,
+                                    data: selectedDate,
+                                    setor: s.setor,
+                                    rua: s.rua,
+                                    demandaCalculada: num,
+                                    unidade: s.unidade || 'CAIXAS'
+                                  }
+                                };
+                                setDemands(updated);
+                                await saveState(STORAGE_DEMANDS_KEY, updated);
+                                localStorage.setItem(STORAGE_DEMANDS_KEY, JSON.stringify(updated));
+                                onAddToast(`Demanda de ${num} salva para ${s.rua}!`, 'var(--color-success)');
+                              }
+                            }
+                          }}
                           className="px-2 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-[0.6rem] font-bold uppercase transition-all cursor-pointer"
                         >
                           {s.demanda !== null ? 'Editar' : '+ Demanda'}
@@ -755,131 +706,7 @@ export default function ManagementModule({
         </div>
       )}
 
-      {/* RELATÓRIOS CONSOLIDADOS */}
-      {activeSubView === 'relatorios' && (
-        <div className="space-y-4">
-          <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-950 to-slate-950 border border-blue-500/30 shadow-md space-y-3">
-            <div className="flex items-center gap-2">
-              <BarChart3 size={18} className="text-blue-400" />
-              <h2 className="text-sm font-black text-white uppercase">
-                Relatórios Consolidados do Dia
-              </h2>
-            </div>
-
-            <p className="text-xs text-slate-300">
-              Visualize relatórios unificados calculados a partir dos dados consolidados no banco
-              local. Estes dados são enviados para o Google Sheets na próxima sincronização.
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-white/10">
-              <div className="p-3 bg-slate-900/90 rounded-xl border border-emerald-500/30 space-y-2">
-                <h3 className="text-xs font-black text-emerald-400 uppercase">Relatório Diário</h3>
-                <div className="space-y-1 text-[0.7rem]">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Data:</span>
-                    <span className="text-white font-bold">{targetDateBR}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Demanda Total:</span>
-                    <span className="text-white font-bold">{totals.totalDemanda} vol</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Realizado:</span>
-                    <span className="text-cyan-300 font-bold">{totals.totalRealizado} vol</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Cobertura:</span>
-                    <span className="text-emerald-300 font-bold">{totals.coberturaGlobal}%</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Produtividade:</span>
-                    <span className="text-purple-300 font-bold">{totals.vphGlobal} VPH</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3 bg-slate-900/90 rounded-xl border border-blue-500/30 space-y-2">
-                <h3 className="text-xs font-black text-blue-400 uppercase">Relatório Semanal</h3>
-                <div className="space-y-1 text-[0.7rem]">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Semana:</span>
-                    <span className="text-white font-bold">{targetWeekNumber}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Demanda Total:</span>
-                    <span className="text-white font-bold">{totals.totalDemanda} vol</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Realizado:</span>
-                    <span className="text-cyan-300 font-bold">{totals.totalRealizado} vol</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Ruas Atendidas:</span>
-                    <span className="text-emerald-300 font-bold">
-                      {totals.ruasAtendidas}/{totals.totalRuas}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">EPH Média:</span>
-                    <span className="text-purple-300 font-bold">{totals.ephGlobal}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3 bg-slate-900/90 rounded-xl border border-amber-500/30 space-y-2">
-                <h3 className="text-xs font-black text-amber-400 uppercase">Relatório Mensal</h3>
-                <div className="space-y-1 text-[0.7rem]">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Mês/Ano:</span>
-                    <span className="text-white font-bold">
-                      {new Date(selectedDate).toLocaleDateString('pt-BR', {
-                        month: 'long',
-                        year: 'numeric',
-                      })}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Demanda Total:</span>
-                    <span className="text-white font-bold">{totals.totalDemanda} vol</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Realizado:</span>
-                    <span className="text-cyan-300 font-bold">{totals.totalRealizado} vol</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Endereços:</span>
-                    <span className="text-blue-300 font-bold">{totals.totalEnderecos}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Saldo Pendente:</span>
-                    <span className="text-amber-300 font-bold">{totals.saldoPendenteGlobal} vol</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 text-xs text-slate-300 space-y-2">
-            <p>
-              ✨ <strong>Novo Fluxo Unificado:</strong> Os relatórios são calculados uma única vez a
-              partir dos dados consolidados no banco local. Não há mais redundância de cálculos
-              entre abas antigas.
-            </p>
-            <p>
-              🔄 <strong>Sincronização:</strong> Enquanto o canal batch estiver em preparação, o
-              botão "Sincronizar Agora" delega para o fluxo singular do terminal, garantindo
-              compatibilidade com o Apps Script atual.
-            </p>
-            <p>
-              📊 <strong>Supabase Webhook:</strong> Dados chegam também via webhook automático
-              quando novos registros são inseridos, garantindo zero perda de dados por Wi-Fi
-              instável.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* TRILHA DE EVENTOS */}
+      {/* 5. CONTEÚDO DA SUB-VISÃO: TRILHA DE EVENTOS & FILA SYNC */}
       {activeSubView === 'eventos' && (
         <div className="space-y-4">
           <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-sm flex items-center justify-between">
@@ -900,7 +727,7 @@ export default function ManagementModule({
                   )}
                 </h2>
                 <p className="text-[0.65rem] text-slate-400">
-                  {syncQueueItems.length} eventos pendentes de sincronização
+                  {syncQueueItems.length} eventos pendentes de sincronização para a nuvem
                 </p>
               </div>
             </div>
@@ -908,7 +735,7 @@ export default function ManagementModule({
             <button
               type="button"
               onClick={handleSyncToSheets}
-              disabled={isCurrentlySyncing || syncQueueItems.length === 0}
+              disabled={isSyncingSheets || syncQueueItems.length === 0}
               className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-30 text-black text-xs font-black uppercase rounded-xl cursor-pointer flex items-center gap-1.5"
             >
               <Send size={13} />
@@ -916,51 +743,57 @@ export default function ManagementModule({
             </button>
           </div>
 
+          {/* Histórico Recente de Eventos Locais */}
           <div className="overflow-x-auto rounded-2xl border border-white/15 bg-slate-950 shadow-md">
             <table className="w-full text-left text-xs font-mono">
               <thead className="bg-slate-900 text-slate-400 uppercase text-[0.62rem] border-b border-white/10">
                 <tr>
                   <th className="py-3 px-3">Hora</th>
-                  <th className="py-3 px-3">Tipo</th>
+                  <th className="py-3 px-3">Tipo de Evento</th>
                   <th className="py-3 px-3">Setor/Rua</th>
+                  <th className="py-3 px-3 text-center">Δ Endereços</th>
                   <th className="py-3 px-3 text-center">Δ Volumes</th>
+                  <th className="py-3 px-3">Lap / Duração</th>
                   <th className="py-3 px-3">Justificativa</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {eventsList
-                  .slice(-15)
-                  .reverse()
-                  .map((evt) => (
-                    <tr key={evt.id} className="hover:bg-slate-900/60 transition-colors">
-                      <td className="py-2.5 px-3 text-slate-400">
-                        {new Date(evt.timestamp).toLocaleTimeString('pt-BR')}
-                      </td>
-                      <td className="py-2.5 px-3 font-bold text-emerald-300">{evt.tipo}</td>
-                      <td className="py-2.5 px-3 text-white">
-                        Setor {evt.setor} • <strong>{evt.rua}</strong>
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-bold text-amber-300">
-                        {evt.volumesDelta > 0 ? `+${evt.volumesDelta}` : evt.volumesDelta}
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-400">
-                        {evt.justification ? (
-                          <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[0.6rem] font-bold">
-                            {evt.justification}
-                          </span>
-                        ) : (
-                          '---'
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                {eventsList.slice(-20).reverse().map((evt) => (
+                  <tr key={evt.id} className="hover:bg-slate-900/60 transition-colors">
+                    <td className="py-2.5 px-3 text-slate-400">
+                      {new Date(evt.timestamp).toLocaleTimeString('pt-BR')}
+                    </td>
+                    <td className="py-2.5 px-3 font-bold text-emerald-300">
+                      {evt.tipo}
+                    </td>
+                    <td className="py-2.5 px-3 text-white">
+                      Setor {evt.setor} • <strong>{evt.rua}</strong>
+                    </td>
+                    <td className="py-2.5 px-3 text-center font-bold text-cyan-300">
+                      {evt.enderecosDelta > 0 ? `+${evt.enderecosDelta}` : evt.enderecosDelta}
+                    </td>
+                    <td className="py-2.5 px-3 text-center font-bold text-amber-300">
+                      {evt.volumesDelta > 0 ? `+${evt.volumesDelta}` : evt.volumesDelta}
+                    </td>
+                    <td className="py-2.5 px-3 text-slate-400">
+                      {evt.lapDurationSeconds ? `${evt.lapDurationSeconds}s` : '---'}
+                    </td>
+                    <td className="py-2.5 px-3 text-slate-400">
+                      {evt.justification ? (
+                        <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[0.6rem] font-bold">
+                          {evt.justification}
+                        </span>
+                      ) : '---'}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
-      {/* ODBC & AUDITORIA */}
+      {/* 5.5 CONTEÚDO DA SUB-VISÃO: QUERIES SQL / ODBC & AUDITORIA DE REABASTECIMENTO */}
       {activeSubView === 'odbc' && (
         <OdbcQueryBridge
           streetSummaries={streetSummaries}
@@ -973,14 +806,112 @@ export default function ManagementModule({
             const updated = { ...demands, ...newDemands };
             setDemands(updated);
             await saveState(STORAGE_DEMANDS_KEY, updated);
-            onAddToast('Demandas integradas com sucesso!', 'var(--color-success)');
+            localStorage.setItem(STORAGE_DEMANDS_KEY, JSON.stringify(updated));
+            onAddToast('Demandas da Query ODBC integradas com sucesso!', 'var(--color-success)');
           }}
         />
       )}
 
-      {/* SHEETS CONFIG */}
+      {/* 6. CONTEÚDO DA SUB-VISÃO: CONFIGURAÇÃO GOOGLE SHEETS & SINCRONIZAÇÃO MULTI-MÁQUINA */}
       {activeSubView === 'sheets' && (
         <div className="space-y-4">
+          {/* Card Central de Sincronização Multi-Dispositivo Simultânea */}
+          <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 border border-emerald-500/40 shadow-xl space-y-4 font-mono">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                  <Radio size={22} className={networkStatus === 'online' ? 'animate-pulse' : ''} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-sm font-black text-white uppercase tracking-wider">
+                      Sincronização Multi-Dispositivo Simultânea (PDT ↔ PC ↔ Planilha)
+                    </h2>
+                    {networkStatus === 'online' ? (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[0.62rem] font-black flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                        ONLINE ATIVO
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 text-[0.62rem] font-black flex items-center gap-1">
+                        <WifiOff size={10} />
+                        OFFLINE
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[0.7rem] text-slate-400 mt-0.5">
+                    Transmissão e recebimento de dados simultâneos entre múltiplos computadores e coletores Zebra/PDT.
+                  </p>
+                </div>
+              </div>
+
+              {/* Botão Forçar Sincronismo Imediato */}
+              <button
+                type="button"
+                onClick={async () => {
+                  if (onTriggerSync) {
+                    await onTriggerSync();
+                  } else {
+                    await handleSyncToSheets();
+                  }
+                }}
+                disabled={isCurrentlySyncing}
+                className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black text-xs font-black uppercase rounded-xl border border-emerald-300 shadow-lg shadow-emerald-500/20 flex items-center gap-2 cursor-pointer transition-all active:scale-95"
+              >
+                <RefreshCw size={14} className={isCurrentlySyncing ? 'animate-spin' : ''} />
+                <span>{isCurrentlySyncing ? 'Sincronizando Agora...' : 'Sincronizar Simultâneo Agora'}</span>
+              </button>
+            </div>
+
+            {/* Painel Explicativo de Arquitetura Multi-Máquina */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-white/10 space-y-1">
+                <div className="flex items-center gap-1.5 text-emerald-400 text-xs font-bold uppercase">
+                  <Smartphone size={14} />
+                  <span>1. Coletor / PDT em Campo</span>
+                </div>
+                <p className="text-[0.65rem] text-slate-400 leading-relaxed">
+                  Ao bipejar ou apontar uma rua no Zebra/PDT, o registro é salvo localmente e enviado imediatamente para a nuvem/planilha.
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-white/10 space-y-1">
+                <div className="flex items-center gap-1.5 text-cyan-400 text-xs font-bold uppercase">
+                  <Laptop size={14} />
+                  <span>2. Computador / Painel Torre</span>
+                </div>
+                <p className="text-[0.65rem] text-slate-400 leading-relaxed">
+                  Outro PC ou máquina online recebe os dados automaticamente a cada 30 segundos ou ao focar a aba, atualizando totais e gráficos.
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-white/10 space-y-1">
+                <div className="flex items-center gap-1.5 text-purple-400 text-xs font-bold uppercase">
+                  <FileSpreadsheet size={14} />
+                  <span>3. Planilha Google Central</span>
+                </div>
+                <p className="text-[0.65rem] text-slate-400 leading-relaxed">
+                  Atua como banco mestre unificado (aba <strong className="text-white">Controle de horas - Repro</strong>), consolidando todos os turnos.
+                </p>
+              </div>
+            </div>
+
+            {/* Métricas da Sincronização em Tempo Real */}
+            <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-white/10 text-xs">
+              <div className="flex items-center gap-4 flex-wrap">
+                <span className="text-slate-400">
+                  Última sincronização: <strong className="text-emerald-400">{lastSyncTimestamp || 'Conectando...'}</strong>
+                </span>
+                <span className="text-slate-400">
+                  Registros unificados na base: <strong className="text-white">{logs.length}</strong>
+                </span>
+                <span className="text-slate-400">
+                  Auto-sync em background: <strong className="text-emerald-400">Ativo (30s)</strong>
+                </span>
+              </div>
+            </div>
+          </div>
+
           <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-3">
             <h2 className="text-xs font-black text-white uppercase flex items-center gap-1.5">
               <FileSpreadsheet size={15} className="text-emerald-400" />
@@ -992,47 +923,251 @@ export default function ManagementModule({
                 type="text"
                 value={apiUrl}
                 onChange={(e) => {
-                  const val = e.target.value;
-
-                  // Validação: só aceita URL /exec do Apps Script
-                  if (val && !val.includes('script.google.com') && !val.includes('/exec')) {
-                    onAddToast(
-                      'Use a URL do Apps Script Web App (/exec), não o link de publicação.',
-                      'var(--color-danger)',
-                    );
-                    return;
-                  }
-
-                  onApiUrlChange(val);
+                  onApiUrlChange(e.target.value);
+                  localStorage.setItem('repro_sheets_api_url', e.target.value);
                 }}
                 placeholder="https://script.google.com/macros/s/.../exec"
                 className="flex-1 min-h-[40px] px-3 bg-slate-900 border border-white/15 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
               />
               <button
                 type="button"
-                onClick={() => onAddToast('URL do Google Sheets salva!', 'var(--color-success)')}
+                onClick={() => {
+                  localStorage.setItem('repro_sheets_api_url', apiUrl);
+                  onAddToast('URL do Google Sheets salva com sucesso!', 'var(--color-success)');
+                }}
                 className="min-h-[40px] px-4 bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black uppercase rounded-xl cursor-pointer"
               >
                 Salvar URL
               </button>
             </div>
 
-            <p className="text-[0.65rem] text-slate-400">
-              Use a URL do Apps Script (termina em <code className="text-emerald-400">/exec</code>).
-              Links de publicação (<code>pubhtml</code>) não funcionam para escrita.
-            </p>
+            {/* IMPORTAR REGRAS */}
+            <div className="pt-2 border-t border-white/10 mt-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const { importarRegrasPlanilha } = await import('../utils/importRules');
+                    // For demo purposes, we might use a predefined CSV URL or prompt the user.
+                    // For now, let's use a prompt if they want a specific URL, or fallback to the provided apiUrl.
+                    const csvUrl = prompt('Insira a URL do CSV publicado (Regras de Validação):', '');
+                    if (csvUrl) {
+                      const regras = await importarRegrasPlanilha(csvUrl);
+                      await saveState('regras_validacao_reabastecimento', regras);
+                      onAddToast(`Sucesso! ${regras.length} regras importadas e salvas offline.`, 'var(--color-success)');
+                    }
+                  } catch (err: any) {
+                    onAddToast(`Erro ao importar regras: ${err.message}`, 'var(--color-danger)');
+                  }
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase rounded-xl cursor-pointer shadow-md transition-all flex items-center gap-2"
+              >
+                <Download size={14} />
+                Importar Regras de Validação (CSV)
+              </button>
+            </div>
+
+            {lastSyncTimestamp && (
+              <p className="text-[0.68rem] text-emerald-400">
+                Última sincronização bem-sucedida às {lastSyncTimestamp}
+              </p>
+            )}
+          </div>
+
+          {/* Configuração do Descanso de Tela (Screensaver) */}
+          <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-4 font-mono">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="space-y-0.5">
+                <h2 className="text-xs font-black text-white uppercase flex items-center gap-1.5">
+                  <Moon size={15} className={screensaverEnabled ? 'text-purple-400' : 'text-slate-400'} />
+                  <span>Descanso de Tela / Economia de Energia</span>
+                </h2>
+                <p className="text-[0.65rem] text-slate-400">
+                  Controle a inatividade automática para coletores Zebra e terminais de operação.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => updateScreensaverEnabled(!screensaverEnabled, onAddToast)}
+                className={`px-4 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-2 cursor-pointer transition-all ${
+                  screensaverEnabled 
+                    ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/25' 
+                    : 'bg-slate-900 border border-white/20 text-slate-400 hover:text-white'
+                }`}
+              >
+                <Moon size={14} className={screensaverEnabled ? 'text-white' : 'text-slate-400'} />
+                <span>{screensaverEnabled ? 'ATIVADO' : 'DESATIVADO'}</span>
+              </button>
+            </div>
+
+            <div className="border-t border-white/10 pt-3 space-y-2">
+              <label className="text-[0.65rem] font-bold text-slate-300 uppercase flex items-center gap-1.5">
+                <Clock size={12} className="text-emerald-400" />
+                <span>Tempo de Inatividade para Disparar:</span>
+              </label>
+
+              <div className="flex items-center flex-wrap gap-1.5">
+                {[1, 2, 5, 10, 15, 30].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    disabled={!screensaverEnabled}
+                    onClick={() => updateScreensaverTimeout(mins, onAddToast)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                      screensaverTimeout === mins && screensaverEnabled
+                        ? 'bg-emerald-500 text-black font-black shadow-md'
+                        : 'bg-slate-900 border border-white/10 text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    {mins} {mins === 1 ? 'minuto' : 'minutos'}
+                  </button>
+                ))}
+              </div>
+
+              <p className="text-[0.6rem] text-slate-500 pt-1">
+                {screensaverEnabled 
+                  ? `O protetor de tela será acionado após ${screensaverTimeout} minutos sem interação do usuário.` 
+                  : 'O protetor de tela está completamente DESATIVADO. O aplicativo nunca bloqueará a tela automaticamente.'}
+              </p>
+            </div>
+          </div>
+
+          {/* Card Executivo de Ajuda e Integração com Google Sheets */}
+          <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 to-slate-950 border border-emerald-500/20 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-emerald-400">
+                <FileSpreadsheet size={18} />
+                <h3 className="text-xs font-black uppercase tracking-wider font-mono">
+                  Instruções & Script do Google Sheets
+                </h3>
+              </div>
+              <p className="text-xs text-slate-400 max-w-xl">
+                O código de integração e o passo a passo completo estão centralizados no Manual de Ajuda para manter as telas limpas para o operador.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setHelpModalTab('sheets');
+                setShowHelpModal(true);
+              }}
+              className="px-4 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold font-mono uppercase flex items-center gap-2 cursor-pointer transition-all shrink-0"
+            >
+              <FileSpreadsheet size={15} />
+              <span>Ver Script & Passo a Passo</span>
+            </button>
           </div>
         </div>
       )}
 
-      {/* DIAGNÓSTICO */}
-      {activeSubView === 'diagnostico' && <DiagnosticsTelemetryView />}
+      {/* 6. CONTEÚDO DA SUB-VISÃO: CONEXÃO SITE EXTERNO & TORRE TV */}
+      {activeSubView === 'externo' && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Banner de Introdução */}
+          <div className="p-5 rounded-2xl bg-gradient-to-r from-cyan-950/60 to-slate-950 border border-cyan-500/30 shadow-lg space-y-2">
+            <div className="flex items-center gap-2 text-cyan-400">
+              <Globe size={18} />
+              <h2 className="text-sm font-black uppercase tracking-wider font-mono">
+                Conexão da Aba Gestão com Sites Externos & Painéis de TV
+              </h2>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Exiba os dados de <strong>Reabastecimento em tempo real</strong> em qualquer site externo, portal corporativo, intranet ou televisores de torre de controle em <strong>modo somente leitura (Read-Only)</strong>.
+            </p>
+          </div>
 
-      {/* MODAL DE AJUDA */}
+          {/* Card Modo TV */}
+          <div className="p-5 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
+              <div className="space-y-0.5">
+                <h3 className="text-xs font-black text-white uppercase flex items-center gap-2 font-mono">
+                  <Tv size={15} className="text-cyan-400" />
+                  <span>Modo Standalone / Televisores de Torre</span>
+                </h3>
+                <p className="text-[0.65rem] text-slate-400">
+                  URL direta para exibição em tela cheia na torre de controle ou embutir em portais.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <a
+                  href={`${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}?view=gestao&standalone=true`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 bg-slate-900 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer font-mono"
+                >
+                  <ExternalLink size={13} />
+                  <span>Testar em Nova Aba</span>
+                </a>
+              </div>
+            </div>
+
+            {/* Link Direto */}
+            <div className="space-y-1.5">
+              <label className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                URL Standalone (Modo TV / Somente Gestão):
+              </label>
+              <div className="flex items-center gap-2 bg-slate-900 p-2.5 rounded-xl border border-white/10">
+                <input
+                  type="text"
+                  readOnly
+                  value={`${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}?view=gestao&standalone=true`}
+                  className="bg-transparent text-xs text-cyan-300 focus:outline-none w-full font-mono select-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleCopy(`${window.location.origin + window.location.pathname}?view=gestao&standalone=true`, 'url')}
+                  className="px-3 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all shrink-0 font-mono"
+                >
+                  {copiedType === 'url' ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                  <span>{copiedType === 'url' ? 'Copiado!' : 'Copiar URL'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-[0.65rem] text-slate-400">Precisa do código HTML do iframe ou da API de integração?</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setHelpModalTab('tv');
+                  setShowHelpModal(true);
+                }}
+                className="text-xs text-cyan-400 hover:text-cyan-300 font-bold font-mono underline cursor-pointer flex items-center gap-1"
+              >
+                <span>Ver códigos na Central de Ajuda</span>
+                <ChevronRight size={13} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. CONTEÚDO DA SUB-VISÃO: PERFORMANCE & DIAGNÓSTICO */}
+      {activeSubView === 'diagnostico' && (
+        <DiagnosticsTelemetryView />
+      )}
+
+      {/* 8. CONTEÚDO DA SUB-VISÃO: SUPABASE */}
+      {activeSubView === 'supabase' && (
+        <div className="space-y-4">
+          <SupabaseConfigModule />
+        </div>
+      )}
+
+      {/* 9. CONTEÚDO DA SUB-VISÃO: FOLLOW-UP (PRODUTIVIDADE) */}
+      {activeSubView === 'followup' && (
+        <ProductivityFollowup events={eventsList} />
+      )}
+
+      {/* MODAL DE AJUDA & DOCUMENTAÇÃO */}
       <HelpSupportModal
         isOpen={showHelpModal}
         onClose={() => setShowHelpModal(false)}
         apiUrl={apiUrl}
+        initialTab={helpModalTab}
       />
     </div>
   );

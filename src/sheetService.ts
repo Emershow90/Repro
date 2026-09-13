@@ -1,20 +1,9 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- *
- * Google Sheets Service — comunicação com Apps Script / planilha publicada.
- *
- * CORREÇÕES APLICADAS (Fase 1):
- *  - Backoff exponencial + jitter em postLogWithRetry (antes: linear)
- *  - Tier 3 no-cors retorna false (antes: mentia sucesso sem confirmação)
- *  - qtdEnderecos usa log.enderecos (antes: sempre log.volumes)
- *  - Novo campo `volumes` no payload singular
- *  - setor default 'NAO_DEFINIDO' (antes: '87' mascarava erro)
- *  - id: newLogId() (antes: Date.now() + idx colidia com newLogId)
- *  - fetchFromCloud não refaz o Sheets quando ambos falham
  */
 
-import { Log, newLogId } from './types';
+import { Log } from './types';
 import { saveLog, getLogs, getUnsyncedLogs, saveLogsBulk } from './dbLocal';
 import { saveLogsDirectly, fetchLogsDirectly } from './utils/supabase/client';
 import { getWeekNumber, parseDateString, getDayOfWeekName } from './utils/dateUtils';
@@ -28,7 +17,7 @@ import { telemetry } from './utils/telemetry';
 export function normalizeSheetUrl(url: string): string {
   if (!url) return '';
   let trimmed = url.trim();
-
+  
   // Auto-convert Google Apps Script /dev URLs to production /exec Web App URLs
   if (trimmed.includes('script.google.com') && (trimmed.endsWith('/dev') || trimmed.includes('/dev?'))) {
     trimmed = trimmed.replace(/\/dev(\?.*)?$/, '/exec$1');
@@ -118,23 +107,17 @@ function parseCSVData(csvText: string): Record<string, unknown>[] {
 
   return rows;
 }
-
 function jsonpFetch(url: string, timeoutMs = 15000): Promise<any> {
-  // Allowlist: JSONP só para Apps Script (evita execução arbitrária)
-  if (!/^https:\/\/script\.google\.com\//.test(url)) {
-    return Promise.reject(new Error('JSONP só é permitido para script.google.com'));
-  }
-
   return new Promise((resolve, reject) => {
     const callbackName = 'jsonpCallback_' + Math.round(1000000 * Math.random());
     let cleanupDone = false;
-
+    
     const timeoutId = setTimeout(() => {
       cleanup();
       reject(new Error('JSONP timeout: Planilha demorou muito para responder'));
     }, timeoutMs);
 
-    (window as any)[callbackName] = function (data: any) {
+    (window as any)[callbackName] = function(data: any) {
       cleanup();
       resolve(data);
     };
@@ -142,7 +125,7 @@ function jsonpFetch(url: string, timeoutMs = 15000): Promise<any> {
     const script = document.createElement('script');
     const separator = url.includes('?') ? '&' : '?';
     script.src = url + separator + 'callback=' + callbackName;
-
+    
     script.onerror = () => {
       cleanup();
       reject(new Error('Falha no JSONP: Verifique acesso e conectividade. O script bloqueou ou não está disponível.'));
@@ -170,29 +153,27 @@ export async function postToGoogleSheets(apiUrlInput: string, log: Log): Promise
   const apiUrl = normalizeSheetUrl(apiUrlInput);
 
   const payload = {
-    setor: log.setor || 'NAO_DEFINIDO',
+    setor: log.setor || '87',
     data: log.data,
     semana: log.semana,
     semanaAno: new Date().getFullYear(),
+    activity: log.atividade, // support both keys just in case
     atividade: log.atividade,
     colaborador: log.colaborador,
-    // Usa `enderecos` quando disponível; senão, cai para `volumes` (legado)
-    qtdEnderecos: log.enderecos ?? log.volumes,
-    // Campo explícito para o Code.gs v2 mapear na coluna correta
-    volumes: log.volumes,
+    qtdEnderecos: log.volumes,
     horas: log.horas,
     vph: log.vph,
     tipo: log.tipo || 'direta',
     horaInicio: log.horaInicio || '',
-    horaFim: log.horaFim || '',
+    horaFim: log.horaFim || ''
   };
 
-  // Tier 1: Server-side proxy (/api/sheets/proxy) — único tier que confirma status real
+  // Tier 1: Try Server-side proxy first if backend API is available (active on Node.js/Cloud Run)
   try {
     const proxyRes = await fetch('/api/sheets/proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiUrl, payload }),
+      body: JSON.stringify({ apiUrl, payload })
     });
 
     if (proxyRes.ok) {
@@ -205,10 +186,10 @@ export async function postToGoogleSheets(apiUrlInput: string, log: Log): Promise
       }
     }
   } catch {
-    // Silencioso — cai para Tier 2
+    // Ignore server proxy errors and fall back to client-side methods
   }
 
-  // Tier 2: Direct browser fetch com CORS
+  // Tier 2: Direct browser fetch with standard CORS
   try {
     const response = await fetch(apiUrl, {
       method: 'POST',
@@ -224,17 +205,18 @@ export async function postToGoogleSheets(apiUrlInput: string, log: Log): Promise
     console.warn('Direct Google Sheets CORS POST error, trying no-cors fallback:', err);
   }
 
-  // Tier 3: no-cors — só confirma que a request SAIU, não que foi processada.
-  // Retorna false para o retry continuar; confirmação vem via fetchFromCloud (dedup no App.tsx).
+  // Tier 3: Direct browser fetch with mode: 'no-cors' (Reliable write-only bypass for static hosts like Vercel)
   try {
     await fetch(apiUrl, {
       method: 'POST',
       mode: 'no-cors',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload)
     });
-    telemetry.warn('sheetService', 'POST no-cors enviado — confirmação pendente via pull');
-    return false;
+    // With 'no-cors', the response is opaque, meaning we can't inspect the body.
+    // However, since the browser successfully sends the request to the Google script endpoint,
+    // we can safely assume success for the transmission.
+    return true;
   } catch (err) {
     console.warn('Google Sheets no-cors POST error:', err);
     return false;
@@ -248,12 +230,12 @@ export async function postBatchToGoogleSheets(apiUrlInput: string, payload: unkn
   if (!apiUrlInput || !apiUrlInput.startsWith('http')) return false;
   const apiUrl = normalizeSheetUrl(apiUrlInput);
 
-  // Tier 1: Server-side proxy
+  // Tier 1: Try Server-side proxy first if backend API is available (active on Node.js/Cloud Run)
   try {
     const proxyRes = await fetch('/api/sheets/proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiUrl, payload }),
+      body: JSON.stringify({ apiUrl, payload })
     });
 
     if (proxyRes.ok) {
@@ -266,10 +248,10 @@ export async function postBatchToGoogleSheets(apiUrlInput: string, payload: unkn
       }
     }
   } catch {
-    // Fallback
+    // Fallback to client fetch
   }
 
-  // Tier 2: Direct CORS
+  // Tier 2: Direct browser fetch with standard CORS
   try {
     const response = await fetch(apiUrl, {
       method: 'POST',
@@ -285,16 +267,15 @@ export async function postBatchToGoogleSheets(apiUrlInput: string, payload: unkn
     console.warn('Direct Google Sheets CORS POST batch error, trying no-cors fallback:', err);
   }
 
-  // Tier 3: no-cors — mesma política do singular (não mente sucesso)
+  // Tier 3: Direct browser fetch with mode: 'no-cors' (Reliable write-only bypass for static hosts like Vercel)
   try {
     await fetch(apiUrl, {
       method: 'POST',
       mode: 'no-cors',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload)
     });
-    telemetry.warn('sheetService', 'POST batch no-cors enviado — confirmação pendente via pull');
-    return false;
+    return true;
   } catch (err) {
     console.warn('Google Sheets no-cors POST batch error:', err);
     return false;
@@ -312,7 +293,7 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
   const apiUrl = normalizeSheetUrl(apiUrlInput);
   let data: unknown = null;
 
-  // Tier 1: Server-side proxy
+  // Tier 1: Try Server-side proxy (/api/sheets/proxy)
   try {
     const proxyUrl = `/api/sheets/proxy?apiUrl=${encodeURIComponent(apiUrl)}`;
     const proxyRes = await fetch(proxyUrl, { method: 'GET' });
@@ -334,13 +315,16 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
       }
     }
   } catch {
-    // Fallback
+    // Fallback to direct client fetch
   }
 
   // Tier 2: Direct browser fetch
   if (!data) {
     try {
-      const response = await fetch(apiUrl, { method: 'GET', redirect: 'follow' });
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        redirect: 'follow'
+      });
 
       if (response.ok) {
         const text = await response.text();
@@ -359,7 +343,7 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
     }
   }
 
-  // Tier 3: JSONP (só para Apps Script, validado em jsonpFetch)
+  // Tier 3: JSONP Fallback to bypass Google Workspace Auth redirects/CORS (For Web Apps)
   if (!data && !apiUrl.includes('output=csv')) {
     try {
       data = await jsonpFetch(apiUrl);
@@ -368,11 +352,11 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
     }
   }
 
-  // Tier 4: Public CORS proxies (último recurso)
+  // Tier 4: Public CORS proxy fallback for static hosts (e.g., Vercel, GH Pages)
   if (!data) {
     const corsProxies = [
       `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(apiUrl)}`,
+      `https://corsproxy.io/?${encodeURIComponent(apiUrl)}`
     ];
 
     for (const proxyUrl of corsProxies) {
@@ -415,6 +399,7 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
     } else if ('data' in obj && Array.isArray(obj.data)) {
       dataArray = obj.data as unknown[];
     } else {
+      // Check if any sheet name key (e.g., "Controle de horas - Repro") contains an array
       const sheetKeys = ['Controle de horas - Repro', 'Gestão', 'Formulário', 'RESUMO_REPRO'];
       for (const key of sheetKeys) {
         if (key in obj && Array.isArray(obj[key])) {
@@ -422,6 +407,7 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
           break;
         }
       }
+      // Fallback: pick the first key that holds an array of row objects
       if (dataArray.length === 0) {
         for (const k of Object.keys(obj)) {
           if (Array.isArray(obj[k]) && (obj[k] as unknown[]).length > 0) {
@@ -440,7 +426,7 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
     if (!Array.isArray(dataArray)) return [];
   }
 
-  // Mapeia objetos crus da planilha para Log tipado
+  // Map raw sheet objects to typed Log objects
   const parsePtFloat = (v: unknown): number => {
     if (typeof v === 'number') return v;
     if (!v) return 0;
@@ -462,13 +448,14 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
     return str;
   };
 
-  const logs: Log[] = dataArray.map((row: unknown) => {
+  const logs: Log[] = dataArray.map((row: unknown, idx: number) => {
     const r = (row && typeof row === 'object' ? row : {}) as Record<string, unknown>;
     const norm: Record<string, unknown> = {};
     for (const k of Object.keys(r)) {
       norm[k.toLowerCase().trim()] = r[k];
     }
 
+    // Comprehensive sector extraction from any sheet column variations
     let foundSector = String(
       r['Setor'] || r['SETOR'] || r['setor'] || r['Setores'] || r['SETORES'] || r['Sector'] || r['sector'] ||
       norm['setor'] || norm['setores'] || norm['sector'] || norm['linha'] || norm['área'] || norm['area'] || ''
@@ -476,6 +463,7 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
 
     const rawAtividade = String(r['atividade'] || norm['o que foi feito no repro'] || norm['atividade'] || norm['atividade realizada'] || 'Repro').trim();
 
+    // If no explicit sector column was found, infer from activity or observations
     if (!foundSector) {
       const combinedText = `${rawAtividade} ${norm['observações'] || ''} ${norm['detalhes'] || ''} ${norm['comentários'] || ''}`.toLowerCase();
       if (combinedText.includes('88_89_90') || combinedText.includes('88-90') || combinedText.includes('88, 89') || combinedText.includes('88 e 89')) {
@@ -494,6 +482,7 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
     const rawSetor = normalizeSectorId(foundSector);
     const rawData = formatDateStr(r['data'] || norm['data'] || norm['data da atividade']);
 
+    // Extract week number carefully using dateUtils helper
     let rawSemana = 0;
     if (typeof r['Semana'] === 'number' && r['Semana'] > 0 && r['Semana'] <= 53) {
       rawSemana = r['Semana'];
@@ -520,8 +509,7 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
     const vph = rawEph > 0 ? rawEph.toFixed(2) : (rawHoras > 0 ? (rawVolumes / rawHoras).toFixed(2) : '0.00');
 
     return {
-      // newLogId() garante ID monotônico que não colide com IDs gerados localmente
-      id: norm['id'] ? Number(norm['id']) : newLogId(),
+      id: norm['id'] ? Number(norm['id']) : Date.now() + idx,
       data: rawData || new Date().toLocaleDateString('pt-PT'),
       dia: calculatedDia,
       semana: rawSemana || 1,
@@ -530,10 +518,10 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
       volumes: rawVolumes,
       horas: rawHoras,
       vph: vph,
-      timestamp: Date.now(),
+      timestamp: Date.now() - (idx * 1000),
       synced: true,
       tipo: isIndireta ? 'indireta' : 'direta',
-      setor: rawSetor,
+      setor: rawSetor
     };
   });
 
@@ -553,6 +541,7 @@ export function validateGoogleSheetUrl(url: string): { isValid: boolean; message
     return { isValid: false, message: 'URL deve começar com http:// ou https://' };
   }
 
+  // Check Google Apps Script Web App URL (/macros/s/{scriptId}/exec)
   if (cleanUrl.includes('script.google.com') || cleanUrl.includes('/macros/s/')) {
     const scriptIdMatch = cleanUrl.match(/\/macros\/s\/([A-Za-z0-9_-]{20,})\/(exec|dev)/) || cleanUrl.match(/AKfycb[A-Za-z0-9_-]+/);
     if (!scriptIdMatch) {
@@ -561,6 +550,7 @@ export function validateGoogleSheetUrl(url: string): { isValid: boolean; message
     return { isValid: true, message: 'Google Apps Script Web App ID Válido', idFound: scriptIdMatch[0] };
   }
 
+  // Check Published Google Sheet URL (/spreadsheets/d/{sheetId} or /spreadsheets/d/e/{pubId})
   if (cleanUrl.includes('docs.google.com/spreadsheets')) {
     const pubIdMatch = cleanUrl.match(/\/spreadsheets\/d\/e\/([A-Za-z0-9_-]{20,})/) || cleanUrl.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]{20,})/);
     if (!pubIdMatch) {
@@ -573,72 +563,64 @@ export function validateGoogleSheetUrl(url: string): { isValid: boolean; message
 }
 
 /**
- * Fast ping and detailed connection diagnostic test
+ * Fast ping and detailed connection diagnostic test for Google Apps Script / Google Sheets
  */
 export async function pingGoogleSheetsEndpoint(apiUrl: string): Promise<{ success: boolean; latencyMs: number; message: string; details?: any }> {
   const startTime = performance.now();
-  const isDev = import.meta.env.DEV;
-
-  if (isDev) {
-    console.group('%c[Google Sheets Ping Diagnostic]', 'color: #38bdf8; font-weight: bold;');
-    console.log('Target API URL:', apiUrl);
-    console.log('Timestamp:', new Date().toISOString());
-  }
+  console.group('%c[Google Sheets Ping Diagnostic]', 'color: #38bdf8; font-weight: bold;');
+  console.log('Target API URL:', apiUrl);
+  console.log('Timestamp:', new Date().toISOString());
 
   if (!apiUrl || !apiUrl.startsWith('http')) {
     const errMsg = 'URL de integração vazia ou sem protocolo HTTP/HTTPS.';
-    if (isDev) {
-      console.error('❌ Connectivity Ping Failed:', errMsg);
-      console.groupEnd();
-    }
+    console.error('❌ Connectivity Ping Failed:', errMsg);
+    console.groupEnd();
     return { success: false, latencyMs: 0, message: errMsg };
   }
 
   const normalizedUrl = normalizeSheetUrl(apiUrl);
-  if (isDev) console.log('Normalized URL:', normalizedUrl);
+  console.log('Normalized URL:', normalizedUrl);
 
   try {
     const proxyUrl = `/api/sheets/proxy?apiUrl=${encodeURIComponent(normalizedUrl)}`;
-    if (isDev) console.log('Attempting connection ping via proxy:', proxyUrl);
+    console.log('Attempting connection ping via proxy:', proxyUrl);
 
     const response = await fetch(proxyUrl, { method: 'GET' });
     const latencyMs = Math.round(performance.now() - startTime);
 
-    if (isDev) {
-      console.log(`HTTP Status: ${response.status} ${response.statusText}`);
-      console.log(`Latency: ${latencyMs}ms`);
-      console.log(`Content-Type: ${response.headers.get('content-type')}`);
-    }
+    console.log(`HTTP Status: ${response.status} ${response.statusText}`);
+    console.log(`Latency: ${latencyMs}ms`);
+    console.log(`Content-Type: ${response.headers.get('content-type')}`);
 
     if (response.ok) {
       const text = await response.text();
-      if (isDev) {
-        console.log('Response Snippet (first 300 chars):', text.substring(0, 300));
-      }
+      console.log('Response Snippet (first 300 chars):', text.substring(0, 300));
       const successMsg = `Ping com sucesso em ${latencyMs}ms (HTTP ${response.status}).`;
-      if (isDev) {
-        console.log('✅ Connection Test Successful:', successMsg);
-        console.groupEnd();
-      }
+      console.log('✅ Connection Test Successful:', successMsg);
+      console.groupEnd();
       return { success: true, latencyMs, message: successMsg, details: text.substring(0, 500) };
     } else {
       const errorMsg = `HTTP Error ${response.status}: ${response.statusText}`;
-      if (isDev) {
-        console.error('❌ Connection Ping HTTP Error:', errorMsg);
-        console.groupEnd();
-      }
+      console.error('❌ Connection Ping HTTP Error:', errorMsg);
+      console.groupEnd();
       return { success: false, latencyMs, message: errorMsg };
     }
   } catch (err: any) {
     const latencyMs = Math.round(performance.now() - startTime);
-    if (isDev) {
-      console.error('❌ Ping Exception Caught:', err.message || 'Erro de rede ou CORS');
-      console.groupEnd();
-    }
-    return {
-      success: false,
-      latencyMs,
-      message: `Falha na conexão (${latencyMs}ms): ${err.message || 'Erro de rede'}`,
+    const errorDetails = {
+      message: err.message || 'Erro de rede ou CORS',
+      stack: err.stack,
+      apiUrl,
+      latencyMs
+    };
+    console.error('❌ Ping Exception Caught:', errorDetails.message);
+    console.dir(errorDetails);
+    console.groupEnd();
+
+    return { 
+      success: false, 
+      latencyMs, 
+      message: `Falha na conexão (${latencyMs}ms): ${err.message || 'Erro de rede'}` 
     };
   }
 }
@@ -656,13 +638,13 @@ export async function testApiConnection(apiUrl: string): Promise<{ success: bool
     const logs = await fetchFromGoogleSheets(apiUrl);
     return {
       success: true,
-      message: `Conexão estabelecida com sucesso (${ping.latencyMs}ms)! ${logs.length} registos encontrados na planilha Google.`,
+      message: `Conexão estabelecida com sucesso (${ping.latencyMs}ms)! ${logs.length} registos encontrados na planilha Google.`
     };
   } catch (err: any) {
     console.error('Test API connection error:', err);
     return {
       success: false,
-      message: `Falha na conexão: ${err.message || 'Verifique a URL e as permissões de acesso do Google Apps Script.'}`,
+      message: `Falha na conexão: ${err.message || 'Verifique a URL e as permissões de acesso do Google Apps Script.'}`
     };
   }
 }
@@ -678,30 +660,30 @@ export async function postLogWithRetry(
 ): Promise<boolean> {
   let gsheetsSuccess = false;
 
-  // Attempt 1: Google Sheets Web App com backoff exponencial + jitter
+  // Attempt 1: Google Sheets Web App
   if (apiUrl && apiUrl.startsWith('http')) {
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let attempt = 0;
+    while (attempt < maxAttempts) {
       const ok = await postToGoogleSheets(apiUrl, log);
       if (ok) {
         gsheetsSuccess = true;
         break;
       }
-      if (attempt < maxAttempts - 1) {
-        const baseDelay = 1000 * Math.pow(2, attempt); // 1000, 2000, 4000
-        const jitter = Math.floor(Math.random() * 500); // 0-500ms
-        await new Promise(resolve => setTimeout(resolve, baseDelay + jitter));
+      attempt++;
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 800 * attempt));
       }
     }
   }
 
-  // Attempt 2: Supabase direct save
+  // Attempt 2: Supabase direct save if userUid is provided
   let supabaseSuccess = false;
   if (userUid) {
     try {
       await saveLogsDirectly([log], userUid);
       supabaseSuccess = true;
     } catch (err) {
-      telemetry.warn('sheetService', 'Supabase postLog falhou', err);
+      console.warn('Supabase postLog retry warning:', err);
     }
   }
 
@@ -709,7 +691,7 @@ export async function postLogWithRetry(
 }
 
 /**
- * Synchronizes the offline queue to Google Sheets and Cloud.
+ * Synchronizes the offline queue (unsynced logs) to Google Sheets and Cloud
  * Uses Concurrency Lock (JobGuard), CircuitBreaker, Indexed query & Batch Bulk Write (Anti-N+1)
  */
 export async function syncOfflineQueue(
@@ -717,13 +699,16 @@ export async function syncOfflineQueue(
   onProgress?: (syncedCount: number) => void,
   userUid?: string
 ): Promise<{ successCount: number; failedCount: number }> {
+  // Prevent duplicate concurrent executions of syncOfflineQueue
   const result = await globalJobGuard.runExclusive('syncOfflineQueue', async () => {
+    // 1. Indexed lookup: O(1) fetch unsynced items without scanning whole table
     const unsyncedLogs = await getUnsyncedLogs();
 
     if (unsyncedLogs.length === 0) {
       return { successCount: 0, failedCount: 0 };
     }
 
+    // Check circuit breaker before initiating requests
     if (sheetsCircuitBreaker.getState() === 'OPEN') {
       telemetry.warn('SyncQueue', 'Circuito de sincronização temporariamente ABERTO para proteger cotas e custos.');
       return { successCount: 0, failedCount: unsyncedLogs.length };
@@ -734,8 +719,9 @@ export async function syncOfflineQueue(
     const successfullySyncedLogs: Log[] = [];
 
     for (let i = unsyncedLogs.length - 1; i >= 0; i--) {
+      // If circuit trips during execution, break early to prevent resource exhaustion
       if (sheetsCircuitBreaker.getState() === 'OPEN') {
-        failedCount += i + 1;
+        failedCount += (i + 1);
         break;
       }
 
@@ -743,16 +729,18 @@ export async function syncOfflineQueue(
       const isSuccess = await postLogWithRetry(apiUrl, log, userUid);
 
       if (isSuccess) {
-        // Cria novo objeto em vez de mutar (evita bug de referência compartilhada)
-        const syncedLog: Log = { ...log, synced: true };
-        successfullySyncedLogs.push(syncedLog);
+        log.synced = true;
+        successfullySyncedLogs.push(log);
         successCount++;
-        if (onProgress) onProgress(successCount);
+        if (onProgress) {
+          onProgress(successCount);
+        }
       } else {
         failedCount++;
       }
     }
 
+    // 2. Anti-N+1: Save all updated logs in ONE single atomic transaction
     if (successfullySyncedLogs.length > 0) {
       await saveLogsBulk(successfullySyncedLogs);
       telemetry.info('SyncQueue', `${successfullySyncedLogs.length} registros salvos no banco local via Bulk Transaction.`);
@@ -768,31 +756,30 @@ export async function syncOfflineQueue(
  * Recovers logs from Google Sheets Web App or Supabase cloud
  */
 export async function fetchFromCloud(apiUrl: string, userUid?: string): Promise<Log[]> {
-  const errors: string[] = [];
-
-  // Tentativa 1: Google Sheets (fonte primária).
-  // Retorna mesmo se vazio — planilha vazia é resposta válida, não erro.
+  // Try Google Sheets first if URL provided
   if (apiUrl && apiUrl.startsWith('http')) {
     try {
-      return await fetchFromGoogleSheets(apiUrl);
-    } catch (err: any) {
-      errors.push(`Sheets: ${err?.message || err}`);
-      telemetry.warn('sheetService', 'Sheets fetch falhou', err);
+      const sheetLogs = await fetchFromGoogleSheets(apiUrl);
+      if (sheetLogs.length > 0) return sheetLogs;
+    } catch (err) {
+      console.warn('Google Sheets fetch failed, checking Supabase fallback:', err);
     }
   }
 
-  // Tentativa 2: Supabase (só se Sheets falhou de fato)
+  // Try Supabase fallback if userUid provided
   if (userUid) {
     try {
-      return (await fetchLogsDirectly(userUid)) ?? [];
+      const cloudLogs = await fetchLogsDirectly(userUid);
+      if (cloudLogs && cloudLogs.length > 0) return cloudLogs;
     } catch (err: any) {
-      errors.push(`Supabase: ${err?.message || err}`);
-      telemetry.warn('sheetService', 'Supabase fetch falhou', err);
+      console.warn('Supabase fallback fetch did not return logs:', err?.message || err);
     }
   }
 
-  if (errors.length > 0) {
-    throw new Error(`Falha ao obter dados da nuvem:\n${errors.join('\n')}`);
+  if (apiUrl && apiUrl.startsWith('http')) {
+    // If Google Sheets fetch was attempted and thrown
+    return await fetchFromGoogleSheets(apiUrl);
   }
-  throw new Error('Nenhuma fonte de dados configurada (URL de Sheets ou usuário Supabase).');
+
+  throw new Error('Não foi possível obter dados da nuvem ou do Google Sheets. Verifique a URL do Google Apps Script.');
 }

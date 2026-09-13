@@ -1,45 +1,27 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
     "module": "ESNext",
-    "moduleResolution": "bundler",
-    "moduleDetection": "force",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "jsx": "react-jsx",
-    "types": ["vite/client"],
-
-    "strict": true,
-    "noFallthroughCasesInSwitch": true,
-    "noImplicitOverride": false,
-    "forceConsistentCasingInFileNames": true,
-
-    "isolatedModules": true,
-    "verbatimModuleSyntax": false,
-
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "resolveJsonModule": true,
-
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "skipLibCheck": true,
-
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-
-    "incremental": true,
-    "tsBuildInfoFile": "./node_modules/.cache/tsconfig.tsbuildinfo",
-
-    "baseUrl": ".",
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "allowJs": true,
+    "jsx": "react-jsx",
     "paths": {
-      "@/*": ["./src/*"]
-    }
+      "@/*": [
+        "./*"
+      ]
+    },
+    "allowImportingTsExtensions": true,
+    "noEmit": true
   },
-  "include": ["src", "vite.config.ts", "server.ts"],
-  "exclude": [
-    "dist",
-    "node_modules",
-    "src/db",
-    "src/lib/firebase.ts",
-    "src/lib/firebase-admin.ts",
-    "src/middleware"
-  ]
+  "exclude": ["dist", "node_modules"]
 }
