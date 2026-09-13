@@ -44,14 +44,11 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          # Injeta automaticamente a URL base do GitHub Pages
           VITE_APP_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
 
       - name: Prepare SPA for GitHub Pages
         run: |
-          # Copy index.html to 404.html para fallback de rotas SPA
           cp dist/index.html dist/404.html
-          # Previne Jekyll de ignorar arquivos que começam com _
           touch dist/.nojekyll
 
       - name: Setup GitHub Pages
