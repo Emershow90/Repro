@@ -31,7 +31,7 @@ export function useSyncEngine(apiUrl: string, userUid?: string, addToast?: Toast
     setNetworkStatus('online');
     setIsSyncing(true);
     try {
-      const result = await syncOfflineQueue(apiUrl, undefined, userUid, controllerRef.current.signal);
+      const result = await syncOfflineQueue(apiUrl, undefined, userUid);
       await refresh();
       if (result.successCount) {
         setLastSyncTime(new Date().toLocaleTimeString('pt-PT'));
