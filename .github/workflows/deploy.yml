@@ -39,8 +39,8 @@ jobs:
           node-version-file: '.nvmrc'
           cache: 'npm'
 
-      - name: Install dependencies
-        # --ignore-scripts pula compilação nativa do odbc (não usada no cliente)
+      - name: Install Dependencies
+        # --ignore-scripts pula compilação nativa do odbc (não é usada no cliente)
         run: npm ci --ignore-scripts
 
       - name: Validate lockfile
