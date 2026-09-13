@@ -6,7 +6,7 @@
     "moduleDetection": "force",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": ["vite/client", "node"],
+    "types": ["vite/client"],
 
     "strict": true,
     "noFallthroughCasesInSwitch": true,
