@@ -1,32 +1,83 @@
 <!doctype html>
-<html lang="pt-PT" class="dark">
+<html lang="pt-BR" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Terminal REPRO</title>
-    <meta name="description" content="Terminal REPRO v5.0: Sistema de alta produtividade intralogística com apontamento de reabastecimento por rua, cálculo de média/endereço, EPH/VPH, consolidação operacional e auditoria completa." />
-    <meta property="og:title" content="Terminal REPRO" />
-    <meta property="og:description" content="Terminal REPRO v5.0: Sistema de alta produtividade intralogística com apontamento de reabastecimento por rua, cálculo de média/endereço, EPH/VPH, consolidação operacional e auditoria completa." />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+
+    <!-- PWA / mobile -->
+    <meta name="theme-color" content="#0a0a0a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="REPRO" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- SEO / compartilhamento -->
+    <title>REPRO v5.0 — Reabastecimento e Produtividade</title>
+    <meta
+      name="description"
+      content="Terminal REPRO v5.0: apontamento de reabastecimento por rua, EPH/VPH, consolidação operacional e auditoria. Funciona offline."
+    />
+    <link rel="canonical" href="%VITE_APP_URL%/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="pt_BR" />
+    <meta property="og:site_name" content="REPRO" />
+    <meta property="og:title" content="REPRO v5.0 — Reabastecimento e Produtividade" />
+    <meta
+      property="og:description"
+      content="Apontamento de reabastecimento em tempo real. Funciona offline nos coletores Zebra."
+    />
+    <meta property="og:url" content="%VITE_APP_URL%/" />
+    <meta property="og:image" content="%VITE_APP_URL%/og-image.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="REPRO v5.0" />
+    <meta
+      name="twitter:description"
+      content="Apontamento de reabastecimento em tempo real. Funciona offline."
+    />
+    <meta name="twitter:image" content="%VITE_APP_URL%/og-image.png" />
+
+    <!-- Migração one-shot de SW (rodar uma vez, depois esquecer) -->
     <script>
-      // Clear any service workers that might be intercepting and causing "Resource was not cached" errors
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then(registrations => {
-          for (const registration of registrations) {
-            registration.unregister().then(success => {
-              if (success) {
-                console.log('Unregistered stale service worker successfully.');
-                window.location.reload();
-              }
-            });
-          }
-        });
-      }
+      (function () {
+        var KEY = 'repro.sw-migration.v5';
+        if (localStorage.getItem(KEY)) return;
+        if (!('serviceWorker' in navigator)) {
+          localStorage.setItem(KEY, '1');
+          return;
+        }
+        navigator.serviceWorker
+          .getRegistrations()
+          .then(function (regs) {
+            return Promise.all(regs.map(function (r) { return r.unregister(); }));
+          })
+          .then(function () {
+            localStorage.setItem(KEY, '1');
+            window.location.reload();
+          });
+      })();
     </script>
     <script type="module" crossorigin src="./assets/index-B73hKp7Z.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-BqrdHU8u.css">
   </head>
   <body>
     <div id="root"></div>
+
+    <noscript>
+      <div style="font-family:system-ui;padding:24px;max-width:480px;margin:auto;">
+        <h1>REPRO precisa de JavaScript</h1>
+        <p>
+          Este aplicativo depende de JavaScript para funcionar.
+          Habilite no navegador e recarregue a página.
+        </p>
+        <p>Em caso de dúvida, contate o time REPRO.</p>
+      </div>
+    </noscript>
+
   </body>
 </html>
-
