@@ -1,74 +1,98 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * IndexedDB Database Layer - Performance Optimized with Indices & Bulk Operations (Anti-N+1)
+ * IndexedDB Database Layer — Performance Optimized with Indices & Bulk Operations
+ *
+ * Notas de design:
+ *  - DB_VERSION = 2 (não bumpado): a fila operacional usa `state` com transação
+ *    única (mitigação do lost update) em vez de store próprio. Migração para
+ *    `events_queue` fica para v3.
+ *  - `Log.tipo` é opcional em `types.ts` (retrocompatibilidade com logs v2 no
+ *    IndexedDB). Toda leitura passa por `normalizeLogTipo`; toda escrita também.
  */
 
-import { Log, AppTimerState } from './types';
+import { Log, AppTimerState, OperationalEvent, normalizeLogTipo } from './types';
 import { telemetry } from './utils/telemetry';
 
-const DB_NAME = "TerminalReproV5";
-const DB_VERSION = 2; // Incremented to add indexes & optimize queries
+const DB_NAME = 'TerminalReproV5';
+const DB_VERSION = 2;
 
 let dbInstance: IDBDatabase | null = null;
 let initPromise: Promise<IDBDatabase> | null = null;
+
+// -------------------------------------------------------------
+// INICIALIZAÇÃO
+// -------------------------------------------------------------
 
 export function initDb(): Promise<IDBDatabase> {
   if (dbInstance) return Promise.resolve(dbInstance);
   if (initPromise) return initPromise;
 
-  initPromise = new Promise((resolve, reject) => {
+  initPromise = new Promise<IDBDatabase>((resolve, reject) => {
     try {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
 
       request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      
-      let logsStore: IDBObjectStore;
-      if (!db.objectStoreNames.contains('logs')) {
-        logsStore = db.createObjectStore('logs', { keyPath: 'id' });
-      } else {
-        logsStore = (event.target as IDBOpenDBRequest).transaction!.objectStore('logs');
-      }
+        const db = (event.target as IDBOpenDBRequest).result;
+        try {
+          let logsStore: IDBObjectStore;
+          if (!db.objectStoreNames.contains('logs')) {
+            logsStore = db.createObjectStore('logs', { keyPath: 'id' });
+          } else {
+            logsStore = (event.target as IDBOpenDBRequest).transaction!.objectStore('logs');
+          }
 
-      // Ensure all single and compound indexes exist
-      if (!logsStore.indexNames.contains('synced')) {
-        logsStore.createIndex('synced', 'synced', { unique: false });
-      }
-      if (!logsStore.indexNames.contains('timestamp')) {
-        logsStore.createIndex('timestamp', 'timestamp', { unique: false });
-      }
-      if (!logsStore.indexNames.contains('data')) {
-        logsStore.createIndex('data', 'data', { unique: false });
-      }
-      if (!logsStore.indexNames.contains('setor')) {
-        logsStore.createIndex('setor', 'setor', { unique: false });
-      }
-      if (!logsStore.indexNames.contains('colaborador')) {
-        logsStore.createIndex('colaborador', 'colaborador', { unique: false });
-      }
-      if (!logsStore.indexNames.contains('setor_data')) {
-        logsStore.createIndex('setor_data', ['setor', 'data'], { unique: false });
-      }
+          const ensureIndex = (
+            store: IDBObjectStore,
+            name: string,
+            keyPath: string | string[],
+          ) => {
+            if (!store.indexNames.contains(name)) {
+              store.createIndex(name, keyPath, { unique: false });
+            }
+          };
 
-      if (!db.objectStoreNames.contains('state')) {
-        db.createObjectStore('state', { keyPath: 'key' });
-      }
-    };
+          ensureIndex(logsStore, 'synced', 'synced');
+          ensureIndex(logsStore, 'timestamp', 'timestamp');
+          ensureIndex(logsStore, 'data', 'data');
+          ensureIndex(logsStore, 'setor', 'setor');
+          ensureIndex(logsStore, 'colaborador', 'colaborador');
+          ensureIndex(logsStore, 'setor_data', ['setor', 'data']);
 
-    request.onsuccess = (event) => {
-      dbInstance = (event.target as IDBOpenDBRequest).result;
-      telemetry.info('IndexedDB', `Banco ${DB_NAME} v${DB_VERSION} inicializado com índices.`);
-      resolve(dbInstance);
-    };
+          if (!db.objectStoreNames.contains('state')) {
+            db.createObjectStore('state', { keyPath: 'key' });
+          }
+        } catch (err) {
+          // Sem re-throw, a transação fica em estado inválido e o onsuccess
+          // nunca dispara — o app fica pendurado. Rethrow força rollback.
+          telemetry.error('IndexedDB', 'Falha na migração de schema', err);
+          throw err;
+        }
+      };
 
-    request.onerror = (event) => {
-      const err = (event.target as IDBOpenDBRequest).error;
-      telemetry.error('IndexedDB', 'Erro ao abrir banco de dados local', err);
-      reject(err);
-    };
+      request.onsuccess = (event) => {
+        dbInstance = (event.target as IDBOpenDBRequest).result;
+        telemetry.info('IndexedDB', `Banco ${DB_NAME} v${DB_VERSION} inicializado.`);
+        resolve(dbInstance);
+      };
+
+      request.onerror = (event) => {
+        const err = (event.target as IDBOpenDBRequest).error;
+        telemetry.error('IndexedDB', 'Erro ao abrir banco de dados local', err);
+        // Permite retry em próxima chamada (private mode, quota, etc.)
+        initPromise = null;
+        reject(err);
+      };
+
+      request.onblocked = () => {
+        telemetry.warn(
+          'IndexedDB',
+          'Upgrade bloqueado por outra aba. Feche as outras abas do REPRO neste dispositivo.',
+        );
+      };
     } catch (err) {
-      telemetry.error('IndexedDB', 'Erro fatal síncrono ao abrir DB', err);
+      telemetry.error('IndexedDB', 'Erro síncrono ao abrir DB', err);
+      initPromise = null;
       reject(err);
     }
   });
@@ -80,40 +104,42 @@ export function getLocalDbInstance(): IDBDatabase | null {
   return dbInstance;
 }
 
+// -------------------------------------------------------------
+// LEITURA
+// -------------------------------------------------------------
+
 /**
- * Retorna todos os logs ordenados por timestamp descrescente
+ * Todos os logs ordenados por `timestamp` DESC.
+ * Requer índice `timestamp` (presente desde o v2).
  */
 export async function getLogs(): Promise<Log[]> {
-  const db = dbInstance || await initDb();
+  const db = dbInstance || (await initDb());
   return telemetry.time('IndexedDB', 'getLogs', () => {
-    return new Promise((resolve, reject) => {
+    return new Promise<Log[]>((resolve, reject) => {
       try {
         const transaction = db.transaction('logs', 'readonly');
         const store = transaction.objectStore('logs');
-        
-        // Use index on timestamp when available for pre-sorted retrieval
-        if (store.indexNames.contains('timestamp')) {
-          const index = store.index('timestamp');
-          const req = index.openCursor(null, 'prev');
-          const results: Log[] = [];
-          req.onsuccess = () => {
-            const cursor = req.result;
-            if (cursor) {
-              results.push(cursor.value);
-              cursor.continue();
-            } else {
-              resolve(results);
-            }
-          };
-          req.onerror = () => reject(req.error);
-        } else {
-          const request = store.getAll();
-          request.onsuccess = () => {
-            const result = request.result as Log[];
-            resolve(result.sort((a, b) => b.timestamp - a.timestamp));
-          };
-          request.onerror = () => reject(request.error);
+
+        if (!store.indexNames.contains('timestamp')) {
+          return reject(
+            new Error('Índice "timestamp" ausente. Bump DB_VERSION para forçar upgrade.'),
+          );
         }
+
+        const index = store.index('timestamp');
+        const req = index.openCursor(null, 'prev');
+        const results: Log[] = [];
+
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (cursor) {
+            results.push(normalizeLogTipo(cursor.value as Log));
+            cursor.continue();
+          } else {
+            resolve(results);
+          }
+        };
+        req.onerror = () => reject(req.error);
       } catch (err) {
         reject(err);
       }
@@ -122,18 +148,32 @@ export async function getLogs(): Promise<Log[]> {
 }
 
 /**
- * Busca apenas registros NÃO sincronizados de forma segura e rápida
+ * Logs não sincronizados. Usa índice `synced` quando disponível
+ * (leitura mínima em vez de full-scan).
  */
 export async function getUnsyncedLogs(): Promise<Log[]> {
-  const db = dbInstance || await initDb();
-  return new Promise((resolve, reject) => {
+  const db = dbInstance || (await initDb());
+  return new Promise<Log[]>((resolve, reject) => {
     try {
       const transaction = db.transaction('logs', 'readonly');
       const store = transaction.objectStore('logs');
+
+      if (store.indexNames.contains('synced')) {
+        const index = store.index('synced');
+        const request = index.getAll(IDBKeyRange.only(false));
+        request.onsuccess = () => {
+          const raw = (request.result as Log[]) || [];
+          resolve(raw.map(normalizeLogTipo));
+        };
+        request.onerror = () => reject(request.error);
+        return;
+      }
+
+      // Fallback: DB v1 sem índice — lê tudo e filtra em memória.
       const request = store.getAll();
       request.onsuccess = () => {
-        const result = (request.result as Log[]) || [];
-        resolve(result.filter(l => !l.synced));
+        const raw = (request.result as Log[]) || [];
+        resolve(raw.filter((l) => !l.synced).map(normalizeLogTipo));
       };
       request.onerror = () => reject(request.error);
     } catch (err) {
@@ -143,51 +183,52 @@ export async function getUnsyncedLogs(): Promise<Log[]> {
 }
 
 /**
- * Busca logs filtrados por data utilizando índice seguro ou fallback
+ * Logs por data (DD/MM/YYYY conforme gravado). Usa índice `data`.
  */
 export async function getLogsByDate(data: string): Promise<Log[]> {
   if (!data || typeof data !== 'string') return [];
-  const db = dbInstance || await initDb();
-  return new Promise((resolve, reject) => {
+  const db = dbInstance || (await initDb());
+  return new Promise<Log[]>((resolve, reject) => {
     try {
       const transaction = db.transaction('logs', 'readonly');
       const store = transaction.objectStore('logs');
+
       if (store.indexNames.contains('data')) {
-        try {
-          const index = store.index('data');
-          const request = index.getAll(IDBKeyRange.only(data));
-          request.onsuccess = () => resolve((request.result as Log[]) || []);
-          request.onerror = () => {
-            store.getAll().onsuccess = (e: any) => {
-              const all = (e.target.result as Log[]) || [];
-              resolve(all.filter(l => l.data === data));
-            };
-          };
-          return;
-        } catch {
-          // Fallback if index fails
-        }
+        const index = store.index('data');
+        const request = index.getAll(IDBKeyRange.only(data));
+        request.onsuccess = () => {
+          const raw = (request.result as Log[]) || [];
+          resolve(raw.map(normalizeLogTipo));
+        };
+        request.onerror = () => reject(request.error);
+        return;
       }
-      store.getAll().onsuccess = (e: any) => {
-        const all = (e.target.result as Log[]) || [];
-        resolve(all.filter(l => l.data === data));
+
+      // Fallback: DB v1 sem índice
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const raw = (request.result as Log[]) || [];
+        resolve(raw.filter((l) => l.data === data).map(normalizeLogTipo));
       };
+      request.onerror = () => reject(request.error);
     } catch (err) {
       reject(err);
     }
   });
 }
 
-/**
- * Salva um log individualmente
- */
+// -------------------------------------------------------------
+// ESCRITA
+// -------------------------------------------------------------
+
 export async function saveLog(log: Log): Promise<boolean> {
-  const db = dbInstance || await initDb();
-  return new Promise((resolve, reject) => {
+  const db = dbInstance || (await initDb());
+  return new Promise<boolean>((resolve, reject) => {
     try {
       const transaction = db.transaction('logs', 'readwrite');
       const store = transaction.objectStore('logs');
-      store.put(log);
+      // Normaliza antes de gravar — mantém DB consistente
+      store.put(normalizeLogTipo(log));
       transaction.oncomplete = () => resolve(true);
       transaction.onerror = () => reject(transaction.error);
     } catch (err) {
@@ -197,20 +238,21 @@ export async function saveLog(log: Log): Promise<boolean> {
 }
 
 /**
- * Batch/Bulk Save (Anti-N+1): Salva múltiplos logs em UMA ÚNICA transação atômica
+ * Batch Save (Anti-N+1): uma única transação atômica para N logs.
  */
 export async function saveLogsBulk(logs: Log[]): Promise<boolean> {
   if (logs.length === 0) return true;
-  const db = dbInstance || await initDb();
+  const db = dbInstance || (await initDb());
   return telemetry.time('IndexedDB', `saveLogsBulk (${logs.length} itens)`, () => {
-    return new Promise((resolve, reject) => {
+    return new Promise<boolean>((resolve, reject) => {
       try {
         const transaction = db.transaction('logs', 'readwrite');
         const store = transaction.objectStore('logs');
-        
+
         for (let i = 0; i < logs.length; i++) {
-          store.put(logs[i]);
+          store.put(normalizeLogTipo(logs[i]));
         }
+
         transaction.oncomplete = () => resolve(true);
         transaction.onerror = () => reject(transaction.error);
       } catch (err) {
@@ -221,8 +263,8 @@ export async function saveLogsBulk(logs: Log[]): Promise<boolean> {
 }
 
 export async function deleteLog(id: number): Promise<boolean> {
-  const db = dbInstance || await initDb();
-  return new Promise((resolve, reject) => {
+  const db = dbInstance || (await initDb());
+  return new Promise<boolean>((resolve, reject) => {
     try {
       const transaction = db.transaction('logs', 'readwrite');
       const store = transaction.objectStore('logs');
@@ -235,9 +277,13 @@ export async function deleteLog(id: number): Promise<boolean> {
   });
 }
 
-export async function saveState<T = any>(key: string, data: T): Promise<boolean> {
-  const db = dbInstance || await initDb();
-  return new Promise((resolve, reject) => {
+// -------------------------------------------------------------
+// STATE (key/value)
+// -------------------------------------------------------------
+
+export async function saveState<T>(key: string, data: T): Promise<boolean> {
+  const db = dbInstance || (await initDb());
+  return new Promise<boolean>((resolve, reject) => {
     try {
       const transaction = db.transaction('state', 'readwrite');
       const store = transaction.objectStore('state');
@@ -250,19 +296,15 @@ export async function saveState<T = any>(key: string, data: T): Promise<boolean>
   });
 }
 
-export async function getState<T = any>(key: string): Promise<T | null> {
-  const db = dbInstance || await initDb();
-  return new Promise((resolve, reject) => {
+export async function getState<T = unknown>(key: string): Promise<T | null> {
+  const db = dbInstance || (await initDb());
+  return new Promise<T | null>((resolve, reject) => {
     try {
       const transaction = db.transaction('state', 'readonly');
       const store = transaction.objectStore('state');
       const request = store.get(key);
       request.onsuccess = () => {
-        if (request.result) {
-          resolve(request.result.data as T);
-        } else {
-          resolve(null);
-        }
+        resolve(request.result ? (request.result.data as T) : null);
       };
       request.onerror = () => reject(request.error);
     } catch (err) {
@@ -272,15 +314,12 @@ export async function getState<T = any>(key: string): Promise<T | null> {
 }
 
 export async function clearLogsAndState(): Promise<boolean> {
-  const db = dbInstance || await initDb();
-  return new Promise((resolve, reject) => {
+  const db = dbInstance || (await initDb());
+  return new Promise<boolean>((resolve, reject) => {
     try {
       const transaction = db.transaction(['logs', 'state'], 'readwrite');
-      const logsStore = transaction.objectStore('logs');
-      const stateStore = transaction.objectStore('state');
-
-      logsStore.clear();
-      stateStore.clear();
+      transaction.objectStore('logs').clear();
+      transaction.objectStore('state').clear();
 
       transaction.oncomplete = () => {
         telemetry.warn('IndexedDB', 'Banco de dados local limpo com sucesso.');
@@ -293,33 +332,77 @@ export async function clearLogsAndState(): Promise<boolean> {
   });
 }
 
-// Fila de Eventos Operacionais para Sincronização em Segundo Plano (Zero bloqueio no PDT)
-export async function enqueueOperationalEvent(event: any): Promise<void> {
-  try {
-    const queue = (await getState<any[]>('operational_sync_queue')) || [];
-    if (!queue.some(item => item.id === event.id)) {
-      queue.push(event);
-      await saveState('operational_sync_queue', queue);
+// -------------------------------------------------------------
+// FILA OPERACIONAL (mitigação do lost update — ver nota no topo)
+// -------------------------------------------------------------
+
+const OPERATIONAL_QUEUE_KEY = 'operational_sync_queue';
+
+/**
+ * Enfileira um evento operacional.
+ *
+ * Usa transação única `readwrite` no store `state`. Sem ela, duas chamadas
+ * concorrentes (read-modify-write) podem perder um dos eventos.
+ */
+export async function enqueueOperationalEvent(event: OperationalEvent): Promise<void> {
+  const db = dbInstance || (await initDb());
+  return new Promise<void>((resolve, reject) => {
+    try {
+      const tx = db.transaction('state', 'readwrite');
+      const store = tx.objectStore('state');
+      const getReq = store.get(OPERATIONAL_QUEUE_KEY);
+
+      getReq.onsuccess = () => {
+        const existing = (getReq.result?.data as OperationalEvent[] | undefined) ?? [];
+        if (!existing.some((item) => item.id === event.id)) {
+          existing.push(event);
+          store.put({ key: OPERATIONAL_QUEUE_KEY, data: existing });
+        }
+      };
+      getReq.onerror = () => reject(getReq.error);
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    } catch (err) {
+      reject(err);
     }
-  } catch (err) {
-    console.warn('Falha ao enfileirar evento operacional offline:', err);
-  }
+  });
 }
 
-export async function getOperationalSyncQueue(): Promise<any[]> {
+export async function getOperationalSyncQueue(): Promise<OperationalEvent[]> {
   try {
-    return (await getState<any[]>('operational_sync_queue')) || [];
+    const queue = await getState<OperationalEvent[]>(OPERATIONAL_QUEUE_KEY);
+    return queue ?? [];
   } catch {
     return [];
   }
 }
 
+/**
+ * Remove da fila os eventos com os IDs informados.
+ * Usa transação única para consistência.
+ */
 export async function clearOperationalSyncQueue(processedIds: string[]): Promise<void> {
-  try {
-    const queue = (await getState<any[]>('operational_sync_queue')) || [];
-    const remaining = queue.filter(item => !processedIds.includes(item.id));
-    await saveState('operational_sync_queue', remaining);
-  } catch (err) {
-    console.warn('Erro ao limpar fila de eventos sincronizados:', err);
-  }
+  if (processedIds.length === 0) return;
+  const db = dbInstance || (await initDb());
+  return new Promise<void>((resolve, reject) => {
+    try {
+      const tx = db.transaction('state', 'readwrite');
+      const store = tx.objectStore('state');
+      const getReq = store.get(OPERATIONAL_QUEUE_KEY);
+
+      getReq.onsuccess = () => {
+        const existing = (getReq.result?.data as OperationalEvent[] | undefined) ?? [];
+        const idSet = new Set(processedIds);
+        const remaining = existing.filter((e) => !idSet.has(e.id));
+        store.put({ key: OPERATIONAL_QUEUE_KEY, data: remaining });
+      };
+      getReq.onerror = () => reject(getReq.error);
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
