@@ -1,322 +1,409 @@
 /**
- * GOOGLE APPS SCRIPT - BACKEND COMPLETO & SINCRONIZAÇÃO DA PLANILHA REPRO
- * 
- * Link do Publicador Web:
- * https://docs.google.com/spreadsheets/d/e/2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2/pubhtml
- * 
- * URL do Web App (Production Exec):
- * https://script.google.com/macros/s/AKfycbxBvISCTmvbAWwcid9UrWUmW3QdIHae2f5fq2OFwuLA/exec
- * 
- * NOTA IMPORTANTE DE IMPLANTAÇÃO:
- * Para disponibilizar a API sem pedir login no Google, implante como Web App com:
- * - Executar como: Eu (meu e-mail)
- * - Quem tem acesso: Qualquer pessoa (Anyone)
- * - Utilize sempre o link /exec em vez de /dev.
+ * GOOGLE APPS SCRIPT — REPRO v2.0
+ *
+ * Deployment:
+ *   - Executar como:  Eu
+ *   - Acesso:         Qualquer pessoa
+ *   - Usar /exec (nunca /dev)
+ *
+ * Script Properties obrigatórias (Arquivo → Propriedades do projeto):
+ *   SPREADSHEET_ID  = <id da planilha>
+ *   API_TOKEN       = <token HMAC/estático para escrita>
+ *
+ * Contrato suportado:
+ *   1. Payload singular (operador Zebra):
+ *      { setor, observacoes|detalhes, qtdEnderecos|paletes, horas, ... }
+ *
+ *   2. Payload consolidado (syncOrchestrator):
+ *      { tipo: "SYNC_BATCH_CONSOLIDATED_REPRO",
+ *        relatorio_diario, relatorio_semanal, relatorio_mensal,
+ *        eventos_pendentes }
  */
 
-var SPREADSHEET_ID = SpreadsheetApp.getActiveSpreadsheet() ? SpreadsheetApp.getActiveSpreadsheet().getId() : "1dm1FJTjbjqIGo4nCLz2odAwbhDZ6eM5yzMLbPXl3N4c";
-var SHEET_NAME = "Controle de horas - Repro";
-var FORM_SHEET_NAME = "Formulário";
-var GESTAO_SHEET_NAME = "Gestão";
-var VALID_SECTORS = ["87", "88", "89", "90"];
+var SHEET_NAME          = "Controle de horas - Repro";
+var GESTAO_SHEET_NAME   = "Gestão";
+var RELATORIOS_SHEET    = "Relatórios Consolidados";
+var VALID_SECTORS       = ["87", "88", "89", "90"];
+var LOCK_TIMEOUT_MS     = 15000;
 
-/**
- * Função utilitária para obter a planilha ativa ou pelo ID registrado
- */
-function getTargetSpreadsheet() {
-  if (SPREADSHEET_ID) {
-    try {
-      return SpreadsheetApp.openById(SPREADSHEET_ID);
-    } catch(e) {}
+// ---------------------------------------------------------------------------
+// Utilidades
+// ---------------------------------------------------------------------------
+
+function getTargetSpreadsheet_() {
+  var id = PropertiesService.getScriptProperties().getProperty("SPREADSHEET_ID");
+  if (!id) throw new Error("SPREADSHEET_ID não configurado em Script Properties");
+  var ss = SpreadsheetApp.openById(id);
+  if (!ss) throw new Error("Planilha não acessível: " + id);
+  return ss;
+}
+
+function jsonOut_(obj, callback) {
+  var json = JSON.stringify(obj);
+  if (callback) {
+    if (!/^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*)*$/.test(callback)) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ status: "erro", mensagem: "callback inválido" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService.createTextOutput(callback + "(" + json + ")")
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
   }
-  return SpreadsheetApp.getActiveSpreadsheet();
+  return ContentService.createTextOutput(json)
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 /**
- * Função auxiliar para extrair os dados de uma aba específica em formato JSON de objetos
+ * Sanitiza valor para célula — previne Formula Injection.
+ * Prefixa com apóstrofo qualquer valor que comece com = + - @ tab CR.
  */
-function extrairDadosDaAba(sheet) {
-  if (!sheet || sheet.getLastRow() === 0) return [];
+function safeCell_(v) {
+  if (v === null || v === undefined) return "";
+  var s = String(v);
+  if (/^[=+\-@\t\r]/.test(s)) return "'" + s;
+  return s;
+}
 
+function extrairDadosDaAba_(sheet) {
+  if (!sheet || sheet.getLastRow() === 0) return [];
   var data = sheet.getDataRange().getValues();
   if (data.length <= 1) return [];
-
   var headers = data[0];
-  var sheetData = [];
-
+  var out = [];
   for (var i = 1; i < data.length; i++) {
-    var rowObj = {};
-    var hasData = false;
-
+    var rowObj = {}, has = false;
     for (var j = 0; j < headers.length; j++) {
-      var headerName = headers[j] ? headers[j].toString().trim() : "";
-      if (headerName !== "") {
-        rowObj[headerName] = data[i][j];
-        if (data[i][j] !== "" && data[i][j] !== null && data[i][j] !== undefined) {
-          hasData = true;
-        }
+      var h = headers[j] ? String(headers[j]).trim() : "";
+      if (h) {
+        rowObj[h] = data[i][j];
+        if (data[i][j] !== "" && data[i][j] !== null && data[i][j] !== undefined) has = true;
       }
     }
-    
-    if (hasData) {
-      sheetData.push(rowObj);
-    }
+    if (has) out.push(rowObj);
   }
-  return sheetData;
+  return out;
 }
 
 /**
- * Localiza a primeira linha verdadeiramente em branco varrendo as colunas A até I a partir da linha 2.
- * Evita anexar no final quando existem linhas em branco intermediárias na planilha.
+ * Retorna o número da primeira linha vazia varrendo A:I a partir da linha 2.
+ * @param {Sheet} sheet
+ * @param {number} startFromRow  linha a partir da qual começar a varredura
  */
-function findFirstAvailableRow(sheet) {
+function findFirstAvailableRow_(sheet, startFromRow) {
   var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return 2;
-  
-  var rangeValues = sheet.getRange(2, 1, Math.max(lastRow - 1, 1), 9).getValues();
-  
-  for (var i = 0; i < rangeValues.length; i++) {
-    var row = rangeValues[i];
-    var isEmpty = true;
+  var from = Math.max(startFromRow || 2, 2);
+  if (lastRow < from) return from;
+
+  var range = sheet.getRange(from, 1, lastRow - from + 1, 9).getValues();
+  for (var i = 0; i < range.length; i++) {
+    var row = range[i], isEmpty = true;
     for (var j = 0; j < row.length; j++) {
-      if (row[j] !== null && row[j] !== undefined && row[j].toString().trim() !== "") {
-        isEmpty = false;
-        break;
+      if (row[j] !== null && row[j] !== undefined && String(row[j]).trim() !== "") {
+        isEmpty = false; break;
       }
     }
-    if (isEmpty) {
-      return i + 2; // Retorna número da linha física
-    }
+    if (isEmpty) return from + i;
   }
-  
   return lastRow + 1;
 }
 
-/**
- * Parser inteligente de setores e observações com desmembramento e rateio proporcional
- */
-function parseSectorBreakdown(rawSetor, rawObs, totalPaletes, totalHoras) {
+// ---------------------------------------------------------------------------
+// Parser de setores (mantido, com fallback de erro)
+// ---------------------------------------------------------------------------
+
+function parseSectorBreakdown_(rawSetor, rawObs, totalPaletes, totalHoras) {
   rawSetor = (rawSetor || "").toString();
-  rawObs = (rawObs || "").toString();
+  rawObs   = (rawObs   || "").toString();
   totalPaletes = parseFloat(totalPaletes) || 0;
-  totalHoras = parseFloat(totalHoras) || 0;
+  totalHoras   = parseFloat(totalHoras)   || 0;
 
   var candidateSectors = [];
-  var sectorMatches = rawSetor.match(/\d+/g);
-  if (sectorMatches) {
-    sectorMatches.forEach(function(s) {
+  var matches = rawSetor.match(/\d+/g);
+  if (matches) {
+    matches.forEach(function(s) {
       if (VALID_SECTORS.indexOf(s) !== -1 && candidateSectors.indexOf(s) === -1) {
         candidateSectors.push(s);
       }
     });
   }
+
+  // Sem setor válido: erro explícito (não grava lixo)
   if (candidateSectors.length === 0) {
-    candidateSectors = ["87"];
+    throw new Error("Nenhum setor válido encontrado em '" + rawSetor + "'. Válidos: " + VALID_SECTORS.join(", "));
   }
 
   var breakdown = [];
-
   if (rawObs.trim() !== "") {
-    var chunks = rawObs.split(/[;|\n,]+/);
-    chunks.forEach(function(chunk) {
+    rawObs.split(/[;|\n,]+/).forEach(function(chunk) {
       chunk = chunk.trim();
       if (!chunk) return;
-
       var numbers = chunk.match(/\d+/g);
-      if (numbers && numbers.length >= 2) {
-        var foundSector = null;
-        var foundQty = null;
+      if (!numbers) return;
 
-        for (var k = 0; k < numbers.length; k++) {
-          var numStr = numbers[k];
-          if (VALID_SECTORS.indexOf(numStr) !== -1) {
-            foundSector = numStr;
-          } else {
-            foundQty = parseFloat(numStr);
-          }
-        }
-
+      if (numbers.length >= 2) {
+        var foundSector = null, foundQty = null;
+        numbers.forEach(function(n) {
+          if (VALID_SECTORS.indexOf(n) !== -1) foundSector = n;
+          else foundQty = parseFloat(n);
+        });
         if (foundSector && foundQty !== null) {
           breakdown.push({ setor: foundSector, qtd: foundQty });
         }
-      } else if (numbers && numbers.length === 1) {
-        var num = numbers[0];
-        if (VALID_SECTORS.indexOf(num) !== -1) {
-          breakdown.push({ setor: num, qtd: 0 });
+      } else if (numbers.length === 1 && VALID_SECTORS.indexOf(numbers[0]) !== -1) {
+        // Só setor sem quantidade: rateia depois
+        if (!breakdown.some(function(b) { return b.setor === numbers[0]; })) {
+          breakdown.push({ setor: numbers[0], qtd: 0 });
         }
       }
     });
   }
 
   if (breakdown.length === 0) {
-    var shareQty = candidateSectors.length > 0 ? (totalPaletes / candidateSectors.length) : totalPaletes;
-    candidateSectors.forEach(function(sec) {
-      breakdown.push({ setor: sec, qtd: shareQty });
-    });
+    var share = totalPaletes / candidateSectors.length;
+    candidateSectors.forEach(function(sec) { breakdown.push({ setor: sec, qtd: share }); });
   }
 
   var sumQty = 0;
-  breakdown.forEach(function(item) { sumQty += item.qtd; });
+  breakdown.forEach(function(b) { sumQty += b.qtd; });
   if (sumQty === 0) sumQty = totalPaletes || 1;
 
-  var result = [];
-  breakdown.forEach(function(item) {
-    var weight = item.qtd / sumQty;
-    var itemHoras = Math.round((totalHoras * weight) * 100) / 100;
-    var itemPaletes = item.qtd > 0 ? item.qtd : Math.round((totalPaletes * weight) * 100) / 100;
-    var itemVph = itemHoras > 0 ? Math.round((itemPaletes / itemHoras) * 10) / 10 : 0;
-
-    result.push({
-      setor: item.setor,
-      qtdEnderecos: itemPaletes,
-      horas: itemHoras,
-      vph: itemVph
-    });
+  return breakdown.map(function(b) {
+    var w = b.qtd / sumQty;
+    var itemHoras    = Math.round(totalHoras   * w * 100) / 100;
+    var itemPaletes  = b.qtd > 0 ? b.qtd : Math.round(totalPaletes * w * 100) / 100;
+    var itemVph      = itemHoras > 0 ? Math.round((itemPaletes / itemHoras) * 10) / 10 : 0;
+    return { setor: b.setor, qtdEnderecos: itemPaletes, horas: itemHoras, vph: itemVph };
   });
-
-  return result;
 }
 
-/**
- * Endpoint GET - Retorna dados por aba ou todas as abas, com trava de segurança para o editor
- */
+// ---------------------------------------------------------------------------
+// doGet — leitura apenas. Sem escrita via GET.
+// ---------------------------------------------------------------------------
+
 function doGet(e) {
-  // TRAVA DE SEGURANÇA: Se 'e' não existir (ao executar diretamente pelo editor de scripts), cria evento falso
-  e = e || { parameter: {} }; 
-  
-  var ss = getTargetSpreadsheet();
-  if (!ss) {
-    return ContentService.createTextOutput(JSON.stringify({ "status": "erro", "erro": "Planilha não encontrada" }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
+  e = e || { parameter: {} };
+  var cb = e.parameter && e.parameter.callback;
 
-  var action = e.parameter ? e.parameter.action : "";
+  try {
+    var ss = getTargetSpreadsheet_();
+    var nomeDaAba = e.parameter && (e.parameter.aba || e.parameter.sheet);
 
-  // Ação: Inserção via GET/JSONP
-  if (action === "insert" && e.parameter.payload) {
-    try {
-      var fakePostPayload = { postData: { contents: e.parameter.payload } };
-      return doPost(fakePostPayload);
-    } catch (err) {
-      return ContentService.createTextOutput(JSON.stringify({ status: "erro", mensagem: err.toString() }))
-        .setMimeType(ContentService.MimeType.JSON);
+    if (nomeDaAba) {
+      var sheet = ss.getSheetByName(nomeDaAba);
+      if (!sheet) return jsonOut_({ status: "erro", erro: "Aba não encontrada" }, cb);
+      return jsonOut_({
+        status: "sucesso",
+        total: extrairDadosDaAba_(sheet).length,
+        dados: extrairDadosDaAba_(sheet)
+      }, cb);
     }
-  }
 
-  // Verifica se o usuário solicitou uma aba específica na URL (suporta 'aba' ou 'sheet')
-  var nomeDaAba = e.parameter.aba || e.parameter.sheet; 
-  
-  if (nomeDaAba) {
-    // Exporta apenas a aba solicitada (ex: "Controle de horas - Repro")
-    var sheet = ss.getSheetByName(nomeDaAba);
-    if (!sheet) {
-      return ContentService.createTextOutput(JSON.stringify({ "status": "erro", "erro": "Aba não encontrada" }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    var dadosAba = extrairDadosDaAba(sheet);
-    var payloadCompleto = {
-      status: "sucesso",
-      total: dadosAba.length,
-      dados: dadosAba
-    };
-
-    var jsonString = JSON.stringify(payloadCompleto);
-    if (e.parameter && e.parameter.callback) {
-      return ContentService.createTextOutput(e.parameter.callback + "(" + jsonString + ")")
-        .setMimeType(ContentService.MimeType.JAVASCRIPT);
-    }
-    return ContentService.createTextOutput(jsonString).setMimeType(ContentService.MimeType.JSON);
-
-  } else {
-    // Se não solicitou uma aba específica, exporta todas as abas da planilha
-    var sheets = ss.getSheets();
     var finalPayload = {};
-    sheets.forEach(function(sheetItem) {
-      finalPayload[sheetItem.getName()] = extrairDadosDaAba(sheetItem);
+    ss.getSheets().forEach(function(s) {
+      finalPayload[s.getName()] = extrairDadosDaAba_(s);
     });
+    return jsonOut_(finalPayload, cb);
 
-    var jsonAll = JSON.stringify(finalPayload);
-    if (e.parameter && e.parameter.callback) {
-      return ContentService.createTextOutput(e.parameter.callback + "(" + jsonAll + ")")
-        .setMimeType(ContentService.MimeType.JAVASCRIPT);
-    }
-    return ContentService.createTextOutput(jsonAll).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return jsonOut_({ status: "erro", mensagem: String(err) }, cb);
   }
 }
 
-/**
- * Endpoint POST - Recebe payload de gravação e registra na PRIMEIRA LINHA LIVRE
- */
+// ---------------------------------------------------------------------------
+// doPost — roteia por tipo, batched, com token
+// ---------------------------------------------------------------------------
+
 function doPost(e) {
   var lock = LockService.getScriptLock();
   try {
-    lock.waitLock(15000);
-  } catch (lErr) {}
+    lock.waitLock(LOCK_TIMEOUT_MS);
+  } catch (lErr) {
+    return jsonOut_({ status: "erro", mensagem: "Concorrência: não foi possível obter lock" });
+  }
 
   try {
-    var ss = getTargetSpreadsheet();
-    if (!ss) throw new Error("Planilha não acessível.");
+    var ss = getTargetSpreadsheet_();
+    var dados = parseBody_(e);
 
-    var sheet = ss.getSheetByName(SHEET_NAME) || ss.getSheetByName(GESTAO_SHEET_NAME) || ss.getSheets()[0];
-    
-    var contents = (e && e.postData) ? e.postData.contents : null;
-    var dados = {};
-    if (contents) {
-      try {
-        dados = JSON.parse(contents);
-      } catch(pjErr) {
-        dados = e.parameter || {};
-      }
-    } else if (e && e.parameter) {
-      dados = e.parameter;
+    // Autenticação por token (opcional mas recomendada)
+    var requiredToken = PropertiesService.getScriptProperties().getProperty("API_TOKEN");
+    if (requiredToken && dados.token !== requiredToken) {
+      return jsonOut_({ status: "erro", mensagem: "Token inválido" });
     }
 
-    var recordsToSave = parseSectorBreakdown(
-      dados.setor,
-      dados.observacoes || dados.detalhes,
-      dados.qtdEnderecos || dados.paletes || dados.quantidade,
-      dados.horas || dados.tempoGasto
-    );
+    // Roteamento por contrato
+    if (dados.tipo === "SYNC_BATCH_CONSOLIDATED_REPRO") {
+      return jsonOut_(handleConsolidatedBatch_(ss, dados));
+    }
+    return jsonOut_(handleSingleRecord_(ss, dados));
 
-    var dataAtividade = dados.data || dados.dataAtividade || new Date().toLocaleDateString('pt-BR');
-    var semana = dados.semana || 1;
-    var semanaAno = dados.semanaAno || new Date().getFullYear();
-    var atividade = dados.atividade || "Reapro";
-    var colaborador = (dados.colaborador || dados.nome || "OPERADOR").toString().toUpperCase();
-
-    var savedRows = [];
-
-    recordsToSave.forEach(function(rec) {
-      var targetRow = findFirstAvailableRow(sheet);
-
-      sheet.getRange(targetRow, 1, 1, 9).setValues([[
-        rec.setor,
-        dataAtividade,
-        semana,
-        semanaAno,
-        atividade,
-        colaborador,
-        rec.qtdEnderecos,
-        rec.horas,
-        rec.vph
-      ]]);
-
-      savedRows.push(targetRow);
-    });
-
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "sucesso",
-      mensagem: "Registros gravados na primeira linha livre disponível",
-      linhasGravadas: savedRows,
-      totalRegistros: savedRows.length
-    })).setMimeType(ContentService.MimeType.JSON);
-
-  } catch (error) {
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "erro",
-      mensagem: error.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return jsonOut_({ status: "erro", mensagem: String(err) });
   } finally {
-    try { lock.releaseLock(); } catch(rErr) {}
+    try { lock.releaseLock(); } catch (_) {}
   }
+}
+
+function parseBody_(e) {
+  if (e && e.postData && e.postData.contents) {
+    try { return JSON.parse(e.postData.contents); }
+    catch (_) { return e.parameter || {}; }
+  }
+  return (e && e.parameter) || {};
+}
+
+// --------- Singular (operador Zebra) ---------------------------------------
+
+function handleSingleRecord_(ss, dados) {
+  var sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) throw new Error("Aba '" + SHEET_NAME + "' não encontrada");
+
+  var breakdown = parseSectorBreakdown_(
+    dados.setor,
+    dados.observacoes || dados.detalhes,
+    dados.qtdEnderecos || dados.paletes || dados.quantidade,
+    dados.horas || dados.tempoGasto
+  );
+
+  var dataAtividade = safeCell_(dados.data || dados.dataAtividade ||
+                                Utilities.formatDate(new Date(), "America/Sao_Paulo", "dd/MM/yyyy"));
+  var semana        = dados.semana    || getIsoWeek_(new Date());
+  var semanaAno     = dados.semanaAno || new Date().getFullYear();
+  var atividade     = safeCell_(dados.atividade   || "Reapro");
+  var colaborador   = safeCell_((dados.colaborador || dados.nome || "OPERADOR").toString().toUpperCase());
+
+  return writeRowsBatched_(sheet, breakdown, function(rec) {
+    return [
+      safeCell_(rec.setor), dataAtividade, semana, semanaAno,
+      atividade, colaborador, rec.qtdEnderecos, rec.horas, rec.vph
+    ];
+  });
+}
+
+// --------- Consolidado (syncOrchestrator) ----------------------------------
+
+function handleConsolidatedBatch_(ss, payload) {
+  var diario  = payload.relatorio_diario  || {};
+  var semanal = payload.relatorio_semanal || {};
+  var mensal  = payload.relatorio_mensal  || {};
+  var eventos = payload.eventos_pendentes || [];
+
+  // 1. Aba de relatórios consolidados (1 linha por sync)
+  var sheetRel = ss.getSheetByName(RELATORIOS_SHEET) || ss.insertSheet(RELATORIOS_SHEET);
+  var rowRel = [
+    new Date(),
+    safeCell_(diario.data || ""),
+    safeCell_(diario.dia  || ""),
+    diario.totalDemanda    || 0,
+    diario.totalRealizado  || 0,
+    diario.saldoPendente   || 0,
+    diario.coberturaGlobal || 0,
+    safeCell_(diario.ephGlobal || ""),
+    safeCell_(diario.vphGlobal || ""),
+    semanal.semana || "",
+    semanal.coberturaGlobal || 0,
+    mensal.mes || "",
+    mensal.coberturaGlobal || 0,
+    eventos.length,
+    payload.versao_schema || ""
+  ];
+  sheetRel.appendRow(rowRel);
+
+  // 2. Eventos individuais → aba principal (formato singular)
+  var sheetLogs = ss.getSheetByName(SHEET_NAME);
+  if (!sheetLogs) throw new Error("Aba '" + SHEET_NAME + "' não encontrada");
+
+  var eventRows = eventos.map(function(ev) {
+    var dataEv = Utilities.formatDate(new Date(ev.timestamp || Date.now()),
+                                       "America/Sao_Paulo", "dd/MM/yyyy");
+    return [
+      safeCell_(ev.setor || ""), dataEv,
+      safeCell_(payload.semana || getIsoWeek_(new Date())),
+      new Date().getFullYear(),
+      safeCell_(ev.tipo || "REABASTECIMENTO"),
+      safeCell_(ev.artigo || ""),
+      ev.enderecosDelta || 0,
+      0,   // horas desconhecidas no evento
+      ev.volumesDelta   || 0
+    ];
+  });
+
+  if (eventRows.length) {
+    var startRow = findFirstAvailableRow_(sheetLogs, 2);
+    var contiguous = isRangeEmpty_(sheetLogs, startRow, eventRows.length);
+    if (contiguous) {
+      sheetLogs.getRange(startRow, 1, eventRows.length, eventRows[0].length).setValues(eventRows);
+    } else {
+      // Escreve linha a linha respeitando buracos
+      eventRows.forEach(function(r) {
+        var tr = findFirstAvailableRow_(sheetLogs, startRow);
+        sheetLogs.getRange(tr, 1, 1, r.length).setValues([r]);
+      });
+    }
+  }
+
+  return {
+    status: "sucesso",
+    modo: "consolidado",
+    eventos_gravados: eventRows.length,
+    relatorio_gravado: true
+  };
+}
+
+// --------- Escrita em batch ------------------------------------------------
+
+function writeRowsBatched_(sheet, breakdown, rowMapper) {
+  var startRow = findFirstAvailableRow_(sheet, 2);
+  var n = breakdown.length;
+  var matrix = breakdown.map(rowMapper);
+
+  // Se o range [startRow, startRow+n) está vazio, um único setValues resolve.
+  if (isRangeEmpty_(sheet, startRow, n)) {
+    sheet.getRange(startRow, 1, n, matrix[0].length).setValues(matrix);
+    return {
+      status: "sucesso",
+      linhasGravadas: rangeArr_(startRow, n),
+      totalRegistros: n
+    };
+  }
+
+  // Senão, escreve individualmente respeitando buracos
+  var gravadas = [];
+  var cursor = startRow;
+  matrix.forEach(function(row) {
+    var tr = findFirstAvailableRow_(sheet, cursor);
+    sheet.getRange(tr, 1, 1, row.length).setValues([row]);
+    gravadas.push(tr);
+    cursor = tr + 1;
+  });
+  return { status: "sucesso", linhasGravadas: gravadas, totalRegistros: gravadas.length };
+}
+
+function isRangeEmpty_(sheet, startRow, numRows) {
+  var lastRow = sheet.getLastRow();
+  if (startRow > lastRow) return true;
+  var end = Math.min(startRow + numRows - 1, lastRow);
+  var values = sheet.getRange(startRow, 1, end - startRow + 1, 9).getValues();
+  for (var i = 0; i < values.length; i++) {
+    for (var j = 0; j < values[i].length; j++) {
+      if (values[i][j] !== null && values[i][j] !== undefined && String(values[i][j]).trim() !== "") {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function rangeArr_(start, n) {
+  var a = [];
+  for (var i = 0; i < n; i++) a.push(start + i);
+  return a;
+}
+
+function getIsoWeek_(date) {
+  var d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  var day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  var yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
