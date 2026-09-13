@@ -90,7 +90,7 @@ export interface ActiveSession {
 export interface OperationalEvent {
   id: string;
   timestamp: number;
-  tipo:
+  tipo: 
     | 'ENDERECO_CONCLUIDO'
     | 'DESFAZER'
     | 'AJUSTE_VOLUME'
@@ -110,6 +110,12 @@ export interface OperationalEvent {
     volumes: number;
     realizado: number;
   };
+  // Campos preenchidos por enqueueOperationalEvent (opcionais)
+  colaborador?: string;
+  data?: string;
+  demandaCalculada?: number;
+  unidade?: 'CAIXAS' | 'VOLUMES';
+  totalRealizadoAteAgora?: number;
 }
 
 export interface StreetReplenishmentSession {
