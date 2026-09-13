@@ -1,6 +1,7 @@
 {
-  "name": "Terminal REPRO",
-  "description": "Terminal REPRO v5.0: Sistema de alta produtividade intralogística com apontamento de reabastecimento por rua, cálculo de média/endereço, EPH/VPH, consolidação operacional e auditoria completa.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "version": "5.0.0",
+  "author": "REPRO Team",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Emershow90/Repro",
+  "homepage": "https://repro-roan.vercel.app"
 }
