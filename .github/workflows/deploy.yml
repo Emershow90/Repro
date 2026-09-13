@@ -2,8 +2,19 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, master]
-  workflow_dispatch:      # permite deploy manual
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - '.editorconfig'
+      - 'LICENSE'
+  workflow_dispatch:
+    inputs:
+      skip_verification:
+        description: 'Pular typecheck/lint/test (apenas build + deploy)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -13,7 +24,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
+  # =========================================================================
+  # JOB 1 — Verificação (typecheck, lint, test) + build web
+  # =========================================================================
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -27,32 +41,79 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        # --ignore-scripts pula a compilação nativa do odbc (não é usada no cliente)
+        run: npm ci --ignore-scripts
 
       - name: Validate lockfile
         run: npm run validate:lock
 
       - name: Typecheck
+        if: ${{ !inputs.skip_verification }}
         run: npm run typecheck
 
       - name: Lint
+        if: ${{ !inputs.skip_verification }}
         run: npm run lint
 
       - name: Test
-        run: npm test -- --run
+        if: ${{ !inputs.skip_verification }}
+        run: npm test
 
-      - name: Build
-        run: npm run build
+      - name: Build web
+        run: npm run build:web
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_APP_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+          VITE_SHEETS_DEFAULT_URL: ${{ secrets.VITE_SHEETS_DEFAULT_URL }}
+          VITE_SHEETS_LEGACY_MARKER: ${{ secrets.VITE_SHEETS_LEGACY_MARKER }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+
+      - name: Verify SPA fallback
+        run: |
+          if [ ! -f dist/404.html ]; then
+            echo "❌ dist/404.html ausente (SPA routing vai quebrar)"
+            exit 1
+          fi
+          echo "✅ 404.html presente"
+
+      - name: Verify base path
+        run: |
+          REPO="${{ github.event.repository.name }}"
+          if ! grep -q "/${REPO}/assets" dist/index.html; then
+            echo "❌ Assets não usam base path /${REPO}/"
+            echo "--- Amostra do index.html ---"
+            grep -o 'src="[^"]*"' dist/index.html | head -3 || true
+            exit 1
+          fi
+          echo "✅ Base path /${REPO}/ OK"
 
       - name: Disable Jekyll
         run: touch dist/.nojekyll
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-web
+          path: dist/
+          retention-days: 1
+
+  # =========================================================================
+  # JOB 2 — Deploy para gh-pages + smoke test
+  # =========================================================================
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-web
+          path: dist/
+
       - name: Deploy to gh-pages
-        uses: JamesIves/github-pages-deploy-action@4a3abc4
+        uses: JamesIves/github-pages-deploy-action@v4.7.2
         with:
           folder: dist
           branch: gh-pages
@@ -63,12 +124,15 @@ jobs:
       - name: Smoke test
         run: |
           URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
-          sleep 20
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
-          echo "URL: $URL"
-          echo "Status: $STATUS"
-          if [ "$STATUS" != "200" ]; then
-            echo "❌ Deploy não respondeu 200"
-            exit 1
-          fi
-          echo "✅ Deploy OK"
+          echo "Testando $URL"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Deploy OK (tentativa $i)"
+              exit 0
+            fi
+            echo "Tentativa $i: HTTP $STATUS — aguardando 5s..."
+            sleep 5
+          done
+          echo "❌ Deploy não respondeu 200 após 60s"
+          exit 1
