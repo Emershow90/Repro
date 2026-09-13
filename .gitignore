@@ -1,8 +1,120 @@
+# ============================================================
+# REPRO v2.0 — .gitignore
+# ============================================================
+
+# ------------------------------------------------------------
+# Dependências
+# ------------------------------------------------------------
 node_modules/
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/install-state.gz
+
+# ------------------------------------------------------------
+# Build / Bundler
+# ------------------------------------------------------------
 build/
 dist/
+dist-ssr/
+out/
+.vite/
+.next/
+*.tsbuildinfo
+
+# PWA (vite-plugin-pwa)
+dev-dist/
+sw.js
+workbox-*.js
+manifest.webmanifest
+
+# ------------------------------------------------------------
+# Testes / Cobertura
+# ------------------------------------------------------------
 coverage/
-.DS_Store
-*.log
-.env*
+.nyc_output/
+*.lcov
+
+# ------------------------------------------------------------
+# Ambientes — NUNCA commitar valores reais
+# ------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+.env.development
+.env.secrets
+.env.backup
 !.env.example
+
+# ------------------------------------------------------------
+# Credenciais e Certificados
+# ------------------------------------------------------------
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+credentials.json
+service-account.json
+*-service-account.json
+
+# Google Apps Script (clasp)
+apps/script/.clasprc.json
+apps/script/.clasp.json
+apps/script/.env
+
+# ------------------------------------------------------------
+# Supabase CLI
+# ------------------------------------------------------------
+supabase/.branches/
+supabase/.temp/
+supabase/.env
+
+# ------------------------------------------------------------
+# Vercel / Deploy
+# ------------------------------------------------------------
+.vercel/
+
+# ------------------------------------------------------------
+# Logs
+# ------------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+*.log.*
+
+# ------------------------------------------------------------
+# Sistema Operacional
+# ------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ------------------------------------------------------------
+# Editores / IDE
+# ------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+
+# ------------------------------------------------------------
+# Cache / Temporários
+# ------------------------------------------------------------
+.cache/
+.temp/
+.tmp/
+*.tmp
