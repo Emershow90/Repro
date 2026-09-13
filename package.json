@@ -1,48 +1,49 @@
 {
   "name": "repro",
-  "private": true,
   "version": "5.0.0",
   "description": "Terminal REPRO v5.0 — Reabastecimento e Produtividade em Tempo Real",
   "license": "Apache-2.0",
+  "author": "REPRO Team",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Emershow90/Repro.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.0.0",
     "npm": ">=10.0.0"
   },
-"scripts": {
-  "dev": "concurrently -n api,web -c magenta,cyan \"npm:dev:server\" \"npm:dev:web\"",
-  "dev:server": "tsx watch server.ts",
-  "dev:web": "vite",
-  "dev:middleware": "tsx server.ts",
+  "scripts": {
+    "dev": "concurrently -n web,api -c cyan,magenta \"npm run dev:web\" \"npm run dev:server\"",
+    "dev:web": "vite",
+    "dev:server": "tsx watch server.ts",
+    "dev:middleware": "tsx server.ts",
 
-  "build": "npm run build:web && npm run build:server",
-  "build:web": "tsc -b && vite build && node scripts/copy-404.mjs",
-  "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "npm run build:web",
+    "build:all": "npm run build:web && npm run build:server",
+    "build:web": "tsc -b && vite build && node scripts/copy-404.mjs",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
 
-  "start": "node dist/server.cjs",
-  "start:prod": "NODE_ENV=production node dist/server.cjs",
-  "preview": "vite preview",
+    "start": "node dist/server.cjs",
+    "preview": "vite preview",
 
-  "clean": "rimraf dist node_modules",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check src/ server.ts",
+    "format": "biome format --write src/ server.ts",
 
-  "typecheck": "tsc --noEmit",
-  "lint": "biome check .",
-  "lint:fix": "biome check --write .",
-  "format": "biome format --write .",
-  "format:check": "biome format .",
-
-  "test": "vitest run",
-  "test:watch": "vitest",
-  "test:coverage": "vitest run --coverage",
-
-  "validate:lock": "node scripts/validate-lockfile.mjs"
-},
+    "validate:lock": "node scripts/validate-lockfile.mjs",
+    "clean": "rimraf dist node_modules"
+  },
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.115.0",
     "@use-gesture/react": "^10.3.1",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "helmet": "^8.0.0",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
@@ -58,13 +59,16 @@
     "@tailwindcss/vite": "^4.1.14",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.1.0",
+    "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^9.1.0",
     "esbuild": "^0.25.12",
     "jsdom": "^25.0.0",
+    "rimraf": "^6.0.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
@@ -73,7 +77,8 @@
     "vitest": "^2.1.0"
   },
   "overrides": {
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "esbuild": "^0.25.12"
   },
   "browserslist": [
     "Chrome >= 110",
