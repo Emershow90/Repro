@@ -1,89 +1,45 @@
 {
-  "name": "repro",
-  "version": "5.0.0",
-  "description": "Terminal REPRO v5.0 — Reabastecimento e Produtividade em Tempo Real",
-  "license": "Apache-2.0",
-  "author": "REPRO Team",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Emershow90/Repro.git"
-  },
+  "name": "react-example",
+  "private": true,
+  "version": "0.0.0",
   "type": "module",
-  "engines": {
-    "node": ">=22.0.0",
-    "npm": ">=10.0.0"
-  },
   "scripts": {
-    "dev": "concurrently -n web,api -c cyan,magenta \"npm run dev:web\" \"npm run dev:server\"",
-    "dev:web": "vite",
-    "dev:server": "tsx watch server.ts",
-    "dev:middleware": "tsx server.ts",
-
-    "build": "npm run build:web",
-    "build:all": "npm run build:web && npm run build:server",
-    "build:web": "tsc -b && vite build && node scripts/copy-404.mjs",
-    "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-
+    "dev": "tsx server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
-    "preview": "vite preview",
-
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "biome check src/ server.ts",
-    "format": "biome format --write src/ server.ts",
-
-    "validate:lock": "node scripts/validate-lockfile.mjs",
-    "clean": "rimraf dist node_modules"
+    "clean": "rm -rf dist",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.115.0",
+    "@tailwindcss/vite": "^4.1.14",
     "@use-gesture/react": "^10.3.1",
-    "cors": "^2.8.5",
+    "@vitejs/plugin-react": "^5.0.4",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
-    "helmet": "^8.0.0",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "odbc": "^2.5.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "react-router-dom": "^7.18.3",
+    "vite": "^6.2.3",
+    "xlsx": "^0.18.5",
     "zod": "^4.4.3",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.0",
-    "@tailwindcss/vite": "^4.1.14",
-    "@testing-library/jest-dom": "^6.6.0",
-    "@testing-library/react": "^16.1.0",
-    "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.7",
-    "@vitejs/plugin-react": "^5.0.4",
-    "concurrently": "^9.1.0",
-    "esbuild": "^0.25.12",
-    "jsdom": "^25.0.0",
-    "rimraf": "^6.0.1",
+    "@types/react-dom": "^19.2.4",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3",
-    "vite-plugin-pwa": "^0.21.0",
-    "vitest": "^2.1.0"
-  },
-  "overrides": {
-    "node-fetch": "^3.3.2",
-    "esbuild": "^0.25.12"
-  },
-  "browserslist": [
-    "Chrome >= 110",
-    "Safari >= 16",
-    "Firefox >= 110",
-    "Android >= 10"
-  ]
+    "vite": "^6.2.3"
+  }
 }
