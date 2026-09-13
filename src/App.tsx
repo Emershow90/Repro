@@ -267,6 +267,10 @@ export default function App() {
     return filterLogsByPeriod(sectorLogs, temporalPeriod, selectedDate, selectedWeek, selectedMonthKey);
   }, [sectorLogs, temporalPeriod, selectedDate, selectedWeek, selectedMonthKey]);
 
+
+
+
+
   // Monitor online status
   useEffect(() => {
     const handleOnline = () => {
@@ -380,7 +384,7 @@ export default function App() {
     setup();
 
     // Subscribe to EventBus
-    EventBus.on<Log>('ATIVIDADE_FINALIZADA', (log) => {
+    EventBus.on('ATIVIDADE_FINALIZADA', (log) => {
       addToast(`Notificando Torre de Comando: ${log.atividade}`, 'var(--color-info)');
     });
   }, []);
@@ -448,6 +452,7 @@ export default function App() {
 
     if (isSyncingRef.current) return;
 
+    // Se for sincronização automática silenciosa em background, garante intervalo de segurança
     const nowMs = Date.now();
     if (silent && !forceAlert && nowMs - lastAutoSyncTimeRef.current < 15000) {
       return;
@@ -478,8 +483,10 @@ export default function App() {
     }
 
     try {
+      // 1. Enviar registros pendentes locais para a planilha / nuvem
       const queueResult = await syncOfflineQueue(currentApiUrl);
 
+      // 2. Buscar registros remotos recentes (gerados por outros PDTs ou PCs)
       let importedCount = 0;
       try {
         const cloudLogs = await fetchFromCloud(currentApiUrl, currentUserObj?.id || currentUserObj?.uid);
@@ -500,6 +507,7 @@ export default function App() {
         console.warn("Pull remoto em segundo plano:", pullErr);
       }
 
+      // 3. Atualizar estado com todos os logs locais unificados
       const refreshedLogs = await getLogs();
       setLogs(refreshedLogs);
 
@@ -527,26 +535,31 @@ export default function App() {
     }
   }, [setNetworkStatus, addToast, setLogs, setLastSyncTime, setIsSyncing]);
 
+  // Synchronize queue wrapper for backward compatibility
   const sincronizarFila = useCallback(async (forcarAlerta = false) => {
     await syncMultiDevice({ silent: !forcarAlerta, forceAlert: forcarAlerta });
   }, [syncMultiDevice]);
 
+  // Trigger import from Google Sheets wrapper
   const importarPlanilha = useCallback(async () => {
     await syncMultiDevice({ silent: false, forceAlert: true });
   }, [syncMultiDevice]);
 
-  // Intervalo de Sincronização Automática em Segundo Plano
+  // Intervalo de Sincronização Automática em Segundo Plano (Multi-Máquinas Online)
   useEffect(() => {
     if (!apiUrl || !dbReady) return;
 
+    // Sincronização inicial silenciosa
     syncMultiDevice({ silent: true });
 
+    // Sincronização periódica a cada 30 segundos
     const syncInterval = setInterval(() => {
       if (navigator.onLine && document.visibilityState === 'visible') {
         syncMultiDevice({ silent: true });
       }
     }, 30000);
 
+    // Sincronização ao retornar para a janela ou reconectar
     const handleFocus = () => {
       if (navigator.onLine && document.visibilityState === 'visible') {
         syncMultiDevice({ silent: true });
@@ -585,6 +598,8 @@ export default function App() {
       addToast(`Erro ao tentar sincronizar o registo #${log.id}.`, 'var(--color-danger)');
     }
   };
+
+  // Direct Stopwatches controllers
 
   const getDiaDaSemana = () => {
     const dias = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
@@ -834,6 +849,7 @@ export default function App() {
       const localLogs = await getLogs();
       setLogs(localLogs);
 
+      // Reset any broken timer state
       await saveState('appState', {
         cronometro: { ativo: false, inicio: 0, segundos: 0, atividade: '', botaoId: '', tipo: 'direta' },
         rascunhoColab: '',
@@ -925,10 +941,12 @@ export default function App() {
   // Global keyboard shortcut for AS/400 Theme & Functions
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // F24 or Alt+T for switching theme
       if (e.key === 'F24' || (e.altKey && (e.key === 't' || e.key === 'T'))) {
         e.preventDefault();
         toggleTheme(addToast);
       }
+      // F5 custom refresh
       if (e.key === 'F5' && e.ctrlKey) {
         // allow normal browser hard reload
       } else if (e.key === 'F5') {
@@ -943,6 +961,7 @@ export default function App() {
   return (
     <div className={`terminal-root ${theme === 'as400' ? 'theme-as400' : ''} p-2 sm:p-4 md:p-8 flex flex-col items-center relative overflow-hidden min-h-screen`}>
       
+      {/* Dynamic Parallax Floating Background Spheres (Disabled in AS/400 mode) */}
       {theme !== 'as400' && (
         <>
           <div 
@@ -966,6 +985,7 @@ export default function App() {
         </>
       )}
 
+      {/* AS/400 CRT TOP SYSTEM LINE */}
       {theme === 'as400' && (
         <div className="w-full max-w-6xl mb-2 px-3 py-1 bg-black border border-[#00ff66] text-[#00ff66] font-mono text-[0.68rem] flex justify-between items-center tracking-widest uppercase">
           <span>IBM 5250 REPRO WMS // ESTAÇÃO: WS01</span>
@@ -974,6 +994,7 @@ export default function App() {
         </div>
       )}
 
+      {/* Global Supabase Loading Progress and Spinner feedback */}
       {supabaseLoading && (
         <div className="fixed top-0 left-0 w-full z-50 pointer-events-none">
           <div className="h-1 bg-gradient-to-r from-transparent via-emerald-400 to-transparent animate-pulse w-full"></div>
@@ -984,6 +1005,7 @@ export default function App() {
         </div>
       )}
       
+      {/* Toast Alert stack overlay */}
       <div className="fixed bottom-6 right-6 flex flex-col gap-2 z-50 pointer-events-none">
         {toasts.map(t => (
           <div
@@ -998,6 +1020,7 @@ export default function App() {
 
       <div className="w-full max-w-6xl space-y-6 relative z-10">
         
+        {/* MODO STANDALONE / EMBED / TV (SITE EXTERNO) */}
         {isStandaloneMode ? (
           <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-slate-950/90 border border-cyan-500/30 rounded-2xl backdrop-blur-md shadow-xl gap-3">
             <div className="flex items-center gap-3">
@@ -1077,6 +1100,7 @@ export default function App() {
           </header>
         ) : (
           <>
+            {/* CABEÇALHO ORGÂNICO */}
             <header className="relative flex flex-col md:flex-row justify-between border-b border-white/10 pb-5 items-start md:items-end gap-4">
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2.5">
@@ -1093,6 +1117,7 @@ export default function App() {
               </div>
               
               <div className="flex flex-col items-start md:items-end gap-2 text-[0.6rem] font-mono tracking-wider">
+                {/* Status Pills */}
                 <div className="flex flex-wrap items-center gap-2">
                   {networkStatus === 'online' ? (
                     <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
@@ -1143,7 +1168,9 @@ export default function App() {
                   )}
                 </div>
 
+                {/* Ações de Restauração, Auto-Backup & Sessão */}
                 <div className="flex flex-wrap items-center gap-2 mt-1 justify-start md:justify-end">
+                  {/* Cronômetro de Contagem Regressiva para Backup Automático do IndexedDB */}
                   <button
                     type="button"
                     onClick={() => handleTriggerIndexedDbBackup(false)}
@@ -1246,6 +1273,7 @@ export default function App() {
               </div>
             </header>
 
+            {/* NAVEGAÇÃO DE ABAS RESPONSIVA COM BEAD DESLIZANTE (PC, MOBILE & PDT ZEBRA) */}
             <TabBarBead
               tabs={navigationTabs}
               activeId={activeTab}
@@ -1254,6 +1282,9 @@ export default function App() {
           </>
         )}
 
+        {/* CONTEÚDO DINÂMICO DE ACORDO COM A ABA ATIVA */}
+        
+        {/* ABA 1: CRONÔMETRO (ACESSO LIVRE SEM LOGIN) */}
         {activeTab === 'cronometro' && (
           <div className="space-y-6 animate-fade-in">
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -1295,6 +1326,7 @@ export default function App() {
                 </section>
               </div>
 
+              {/* STATUS DA BASE / SIDEBAR CONFIGS */}
               <div className="space-y-6">
                 <section className="border-panel p-5 md:p-6 rounded-2xl relative overflow-hidden">
                   <div className="flex items-center gap-2 mb-4 border-b border-white/10 pb-2.5">
@@ -1367,6 +1399,7 @@ export default function App() {
               </div>
             </div>
 
+            {/* ÚLTIMOS APONTAMENTOS RECENTES DA SESSÃO */}
             <RecentLogsTable
               logs={filteredLogs}
               onDeleteLog={handleDeleteLog}
@@ -1378,6 +1411,7 @@ export default function App() {
           </div>
         )}
 
+        {/* ABA 2: REABASTECIMENTO POR RUA (ACESSO LIVRE SEM LOGIN) */}
         {activeTab === 'ruas' && (
           <div className="animate-fade-in">
             <ErrorBoundary fallbackTitle="Módulo de Reabastecimento por Rua">
@@ -1392,6 +1426,7 @@ export default function App() {
           </div>
         )}
 
+        {/* ABA: APOIO OFFLINE AO REABASTECIMENTO (PROVA DE CONCEITO - PDT / COLETOR) */}
         {activeTab === 'apoio' && (
           <div className="animate-fade-in">
             <ErrorBoundary fallbackTitle="Módulo de Apoio Offline ao Reabastecimento">
@@ -1404,6 +1439,7 @@ export default function App() {
           </div>
         )}
 
+        {/* ABA: REABASTECIMENTO GUIADO OFFLINE (FASE A1) */}
         {activeTab === 'guiado' && (
           <div className="animate-fade-in">
             <ErrorBoundary fallbackTitle="Módulo de Reabastecimento Guiado Offline">
@@ -1412,6 +1448,7 @@ export default function App() {
           </div>
         )}
 
+        {/* ABA 3: GESTÃO / AUDITORIA / SHEETS (ACESSO LIVRE / MÓDULO WEB & PC) */}
         {activeTab === 'gestao' && (
           <div className="animate-fade-in">
             <ErrorBoundary fallbackTitle="Módulo de Gestão & Sheets">
@@ -1430,6 +1467,7 @@ export default function App() {
           </div>
         )}
 
+        {/* ABA 4: PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
         {activeTab === 'painel' && (
           !isAuthUnlocked ? (
             <AuthLoginCard
@@ -1444,6 +1482,7 @@ export default function App() {
             />
           ) : (
             <div className="space-y-6 animate-fade-in">
+              {/* 0. CONTROLO OPERACIONAL & FILTROS (SETOR 87 SOLO, 88-90 UNIFICADOS, VISÕES DIÁRIA, SEMANAL E MENSAL) */}
               <TemporalFilterBar
                 activeSectorId={activeSectorId}
                 onSectorChange={(sec) => updateActiveSector(sec, addToast)}
@@ -1461,8 +1500,10 @@ export default function App() {
                 filteredLogsCount={filteredLogs.length}
               />
 
+              {/* 1. MÉTRICAS SESSÃO */}
               <DashboardMetrics logs={filteredLogs} />
 
+              {/* 2. GRÁFICOS & ANÁLISE DE PRODUTIVIDADE */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2">
                   <VphChart logs={filteredLogs} />
@@ -1473,6 +1514,7 @@ export default function App() {
                 </div>
               </div>
 
+              {/* ÚLTIMOS APONTAMENTOS */}
               <RecentLogsTable
                 logs={filteredLogs}
                 onDeleteLog={handleDeleteLog}
@@ -1485,6 +1527,7 @@ export default function App() {
           )
         )}
 
+        {/* ABA 4: HISTÓRICO DE LOGS (PROTEGIDO POR LOGIN) */}
         {activeTab === 'historico' && (
           !isAuthUnlocked ? (
             <AuthLoginCard
@@ -1515,6 +1558,7 @@ export default function App() {
           )
         )}
 
+        {/* ABA 5: FOLLOW-UP SEMANAL (PROTEGIDO POR LOGIN) */}
         {activeTab === 'followup' && (
           !isAuthUnlocked ? (
             <AuthLoginCard
@@ -1543,6 +1587,7 @@ export default function App() {
           )
         )}
 
+        {/* IBM AS/400 5250 RETRO COMMAND & FUNCTION KEY BAR */}
         {theme === 'as400' && (
           <div className="p-3 rounded-xl border border-emerald-500/50 bg-black/90 font-mono text-[0.72rem] text-emerald-400 flex flex-wrap items-center justify-between gap-2 select-none shadow-lg mt-6">
             <div className="flex flex-wrap items-center gap-3">
@@ -1593,12 +1638,14 @@ export default function App() {
         />
       )}
 
+      {/* CENTRAL DE AJUDA & DOCUMENTAÇÃO */}
       <HelpSupportModal
         isOpen={showHelpModal}
         onClose={() => setShowHelpModal(false)}
         apiUrl={apiUrl}
       />
 
+      {/* SOLICITAÇÃO DE PEDIDO - FLOATING BUTTON */}
       <FormModalFloatingButton />
     </div>
   );
