@@ -193,7 +193,7 @@ export const LS_KEYS = {
 // POc Reabastecimento Offline Guiado & Auditoria AS/400
 // -------------------------------------------------------------
 
-export type ReplenishmentStep = 'ENDERECO' | 'CONTENT' | 'ARTIGO' | 'QUANTIDADE' | 'CONFIRMACAO';
+export type ReplenishmentStep = 'ENDERECO' | 'CONTENANT' | 'ARTIGO' | 'QUANTIDADE' | 'CONFIRMACAO';
 
 export interface CatalogArticlePackaging {
   artigo: string;
