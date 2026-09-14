@@ -1,7 +1,7 @@
 // Google Apps Script para o Terminal REPRO (Abas: Controle de horas - Repro, Gestão, Formulário)
 // Instrução: Cole no Editor de Scripts da Planilha Google (Extensões > Apps Script)
 
-var SPREADSHEET_ID = "COLOQUE_O_ID_DA_SUA_PLANILHA_AQUI";
+var SPREADSHEET_ID = "1dm1FJTjbjqIGo4nCLz2odAwbhDZ6eM5yzMLbPXl3N4c";
 var SHEET_NAME = "Controle de horas - Repro";
 var VALID_SECTORS = ["87", "88", "89", "90"];
 
