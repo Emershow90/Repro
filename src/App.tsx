@@ -25,25 +25,25 @@ import { useCollaboratorStore } from './stores/collaboratorStore';
 import { useUIStore } from './stores/uiStore';
 import { useHistoryStore } from './stores/historyStore';
 import { TabType } from './stores/uiStore';
-import AuthLoginCard from './components/AuthLoginCard';
-import DashboardMetrics from './components/DashboardMetrics';
-import TemporalFilterBar from './components/TemporalFilterBar';
-import StopwatchPanel from './components/StopwatchPanel';
-import RankingTable from './components/RankingTable';
-import RecentLogsTable from './components/RecentLogsTable';
-import VphChart from './components/VphChart';
-import BreakdownPanel from './components/BreakdownPanel';
-import HistoryTab from './components/HistoryTab';
-import WeeklyFollowupTab from './components/WeeklyFollowupTab';
-import StreetReplenishmentModule from './components/StreetReplenishmentModule';
-import ManagementModule from './components/ManagementModule';
-import OfflineReplenishmentAssistant from './components/OfflineReplenishmentAssistant';
-import ReabastecimentoGuiado from './components/ReabastecimentoGuiado';
-import ErrorBoundary from './components/ErrorBoundary';
-import Screensaver from './components/Screensaver';
-import HelpSupportModal from './components/HelpSupportModal';
-import TabBarBead from './components/TabBarBead';
-import FormModalFloatingButton from './components/FormModalFloatingButton';
+import AuthLoginCard from './features/auth/AuthLoginCard';
+import DashboardMetrics from './features/dashboard/DashboardMetrics';
+import TemporalFilterBar from './features/dashboard/TemporalFilterBar';
+import StopwatchPanel from './features/timer/StopwatchPanel';
+import RankingTable from './features/dashboard/RankingTable';
+import RecentLogsTable from './features/dashboard/RecentLogsTable';
+import VphChart from './features/dashboard/VphChart';
+import BreakdownPanel from './features/dashboard/BreakdownPanel';
+import HistoryTab from './features/management/HistoryTab';
+import WeeklyFollowupTab from './features/management/WeeklyFollowupTab';
+import StreetReplenishmentModule from './features/streets/StreetReplenishmentModule';
+import ManagementModule from './features/management/ManagementModule';
+import OfflineReplenishmentAssistant from './features/streets/OfflineReplenishmentAssistant';
+import ReabastecimentoGuiado from './features/streets/ReabastecimentoGuiado';
+import ErrorBoundary from './ui/ErrorBoundary';
+import Screensaver from './ui/Screensaver';
+import HelpSupportModal from './ui/HelpSupportModal';
+import TabBarBead from './ui/TabBarBead';
+import FormModalFloatingButton from './ui/FormModalFloatingButton';
 import { 
   deduplicateLogs, 
   isLogMatchingSector, 
@@ -146,10 +146,10 @@ export default function App() {
     setIsImporting,
   } = useHistoryStore();
 
-  const defaultSheetUrl = 'https://script.google.com/macros/s/AKfycbwzg8jDY71b5sMc6Q_qMii3YYQrdyKROuPe9l24iyEtke1Zhx9cCEt1R7xhxmtjN5aK2A/exec';
+  const defaultSheetUrl = 'https://script.google.com/macros/s/AKfycbyuTz4pZYeqgFd0P0BnmoTGfJIKtN9Cw2gwfspIqKbLFRUpjLyBJEeqBe0tfqk85cxu-w/exec';
   const [apiUrl, setApiUrl] = useState(() => {
     const saved = localStorage.getItem('repro_sheets_api_url');
-    if (!saved || saved.includes('2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2')) {
+    if (!saved || saved.includes('2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2') || saved.includes('AKfycbwzg8jDY71b5sMc6Q_q')) {
       localStorage.setItem('repro_sheets_api_url', defaultSheetUrl);
       return defaultSheetUrl;
     }
