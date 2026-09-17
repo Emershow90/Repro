@@ -72,7 +72,7 @@ export default function RecentLogsTable({
               <th className="p-3 font-semibold text-emerald-400">Colaborador</th>
               <th className="p-3 font-semibold text-right">Volumes</th>
               <th className="p-3 font-semibold text-right">Horas</th>
-              <th className="p-3 font-semibold text-right text-emerald-400">VPH</th>
+              <th className="p-3 font-semibold text-right text-emerald-400" title="Volumes por Hora (VPH) / Unidades por Hora (UPH)">Vol/h (VPH)</th>
               <th className="p-3 font-semibold text-center">Ações</th>
             </tr>
           </thead>

@@ -6,7 +6,7 @@ export interface Toast {
   color: string;
 }
 
-export type TabType = 'cronometro' | 'ruas' | 'apoio' | 'gestao' | 'painel' | 'historico' | 'followup' | 'guiado';
+export type TabType = 'cronometro' | 'ruas' | 'artigos' | 'apoio' | 'gestao' | 'painel' | 'historico' | 'followup' | 'guiado' | 'tv';
 export type AppTheme = 'torre' | 'as400';
 
 interface UIState {
@@ -37,18 +37,21 @@ export const useUIStore = create<UIState>((set) => ({
     return 'torre';
   })(),
   activeTab: (() => {
-    // 1. Prioridade: Parâmetro direto na URL (?tab=ruas, ?tab=gestao, ?view=gestao, etc.)
+    // 1. Prioridade: Parâmetro direto na URL (?mode=tv, ?tab=tv, ?tv=1, etc.)
     if (typeof window !== 'undefined' && window.location.search) {
       const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('mode') === 'tv' || urlParams.get('tv') === 'true' || urlParams.get('tv') === '1' || urlParams.get('tab') === 'tv') {
+        return 'tv';
+      }
       const tabParam = (urlParams.get('tab') || urlParams.get('view')) as TabType;
-      if (tabParam && ['cronometro', 'ruas', 'apoio', 'gestao', 'painel', 'historico', 'followup'].includes(tabParam)) {
+      if (tabParam && ['cronometro', 'ruas', 'artigos', 'apoio', 'gestao', 'painel', 'historico', 'followup', 'guiado', 'tv'].includes(tabParam)) {
         return tabParam;
       }
     }
 
     // 2. Persistência no LocalStorage
     const saved = localStorage.getItem('repro_active_tab') as TabType;
-    if (saved === 'cronometro' || saved === 'ruas' || saved === 'apoio' || saved === 'gestao' || saved === 'painel' || saved === 'historico' || saved === 'followup') {
+    if (saved && ['cronometro', 'ruas', 'artigos', 'apoio', 'gestao', 'painel', 'historico', 'followup', 'guiado', 'tv'].includes(saved)) {
       return saved;
     }
     return 'cronometro';

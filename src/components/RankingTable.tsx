@@ -62,7 +62,7 @@ export default function RankingTable({ logs }: RankingTableProps) {
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            VPH
+            Vol/h (VPH)
           </button>
           <button
             onClick={() => setOrderBy('vol')}
@@ -85,7 +85,7 @@ export default function RankingTable({ logs }: RankingTableProps) {
               <th className="p-2.5 pb-3">Colaborador</th>
               <th className="p-2.5 pb-3 text-right">Volumes</th>
               <th className="p-2.5 pb-3 text-right">Horas</th>
-              <th className="p-2.5 pb-3 text-right text-emerald-400">VPH</th>
+              <th className="p-2.5 pb-3 text-right text-emerald-400" title="Volumes por Hora (VPH) / Unidades por Hora (UPH)">Vol/h (VPH)</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5 text-[0.72rem] font-medium font-mono text-slate-300">

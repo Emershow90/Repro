@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef, ChangeEvent } from 'react';
-import { Wifi, WifiOff, Cloud, Database, RefreshCw, AlertCircle, LogIn, LogOut, Loader2, Key, HelpCircle } from 'lucide-react';
+import { Wifi, WifiOff, Cloud, Database, RefreshCw, AlertCircle, LogIn, LogOut, Loader2, Key, HelpCircle, ChevronDown, CheckCircle2 } from 'lucide-react';
 import { Log, AppTimerState } from './types';
 import {
   initDb,
@@ -14,36 +14,38 @@ import {
   saveState,
   getState,
   clearLogsAndState
-} from './dbLocal';
+} from './services/dbLocal';
 import { syncOfflineQueue, fetchFromCloud, postLogWithRetry } from './sheetService';
+import { getBackupConfig, executeSupabaseBackupNow } from './services/supabaseBackupService';
 
-import { getWeekNumber, getDayOfWeekName, formatDateToBR, parseDateString } from './utils/dateUtils';
+import { getWeekNumber, getDayOfWeekName, formatDateToBR, parseDateString, formatTime } from './utils/dateUtils';
 import { pdtAudio } from './utils/pdtAudio';
 import { EventBus } from './eventBus';
-import { useSectorStore } from './stores/sectorStore';
+import { useSectorStore, SECTOR_OPTIONS, SECTOR_NAMES } from './stores/sectorStore';
 import { useCollaboratorStore } from './stores/collaboratorStore';
 import { useUIStore } from './stores/uiStore';
 import { useHistoryStore } from './stores/historyStore';
 import { TabType } from './stores/uiStore';
-import AuthLoginCard from './features/auth/AuthLoginCard';
-import DashboardMetrics from './features/dashboard/DashboardMetrics';
-import TemporalFilterBar from './features/dashboard/TemporalFilterBar';
-import StopwatchPanel from './features/timer/StopwatchPanel';
-import RankingTable from './features/dashboard/RankingTable';
-import RecentLogsTable from './features/dashboard/RecentLogsTable';
-import VphChart from './features/dashboard/VphChart';
-import BreakdownPanel from './features/dashboard/BreakdownPanel';
-import HistoryTab from './features/management/HistoryTab';
-import WeeklyFollowupTab from './features/management/WeeklyFollowupTab';
-import StreetReplenishmentModule from './features/streets/StreetReplenishmentModule';
-import ManagementModule from './features/management/ManagementModule';
-import OfflineReplenishmentAssistant from './features/streets/OfflineReplenishmentAssistant';
-import ReabastecimentoGuiado from './features/streets/ReabastecimentoGuiado';
-import ErrorBoundary from './ui/ErrorBoundary';
-import Screensaver from './ui/Screensaver';
-import HelpSupportModal from './ui/HelpSupportModal';
-import TabBarBead from './ui/TabBarBead';
-import FormModalFloatingButton from './ui/FormModalFloatingButton';
+import AuthLoginCard from './components/AuthLoginCard';
+import DashboardMetrics from './components/DashboardMetrics';
+import TemporalFilterBar from './components/TemporalFilterBar';
+import StopwatchPanel from './components/StopwatchPanel';
+import RankingTable from './components/RankingTable';
+import RecentLogsTable from './components/RecentLogsTable';
+import VphChart from './components/VphChart';
+import BreakdownPanel from './components/BreakdownPanel';
+import HistoryTab from './components/HistoryTab';
+import WeeklyFollowupTab from './components/WeeklyFollowupTab';
+import StreetReplenishmentModule from './components/StreetReplenishmentModule';
+import ManagementModule from './components/ManagementModule';
+import OfflineReplenishmentAssistant from './components/OfflineReplenishmentAssistant';
+import ReabastecimentoGuiado from './features/ReabastecimentoGuiado';
+import TvRadarModule from './components/TvRadarModule';
+import { ArticleAddressAuditModule } from './components/ArticleAddressAuditModule';
+import ErrorBoundary from './components/ErrorBoundary';
+
+import TabBarBead from './components/TabBarBead';
+import FormModalFloatingButton from './components/FormModalFloatingButton';
 import { 
   deduplicateLogs, 
   isLogMatchingSector, 
@@ -70,7 +72,8 @@ import {
   Cpu,
   Moon,
   ExternalLink,
-  ScanLine
+  ScanLine,
+  Tv
 } from 'lucide-react';
 
 const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
@@ -149,7 +152,7 @@ export default function App() {
   const defaultSheetUrl = 'https://script.google.com/macros/s/AKfycbyuTz4pZYeqgFd0P0BnmoTGfJIKtN9Cw2gwfspIqKbLFRUpjLyBJEeqBe0tfqk85cxu-w/exec';
   const [apiUrl, setApiUrl] = useState(() => {
     const saved = localStorage.getItem('repro_sheets_api_url');
-    if (!saved || saved.includes('2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2') || saved.includes('AKfycbwzg8jDY71b5sMc6Q_q')) {
+    if (!saved || saved.includes('2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2')) {
       localStorage.setItem('repro_sheets_api_url', defaultSheetUrl);
       return defaultSheetUrl;
     }
@@ -209,6 +212,29 @@ export default function App() {
     }
   }, [dbReady, isDbBackingUp, addToast]);
 
+  // Rotina de Backup Automático de Snapshots no Supabase (se habilitado pelo gestor)
+  useEffect(() => {
+    if (!dbReady) return;
+    const checkAndRunCloudBackup = async () => {
+      try {
+        const cfg = await getBackupConfig();
+        if (cfg.autoBackupEnabled && cfg.url && cfg.anonKey) {
+          const lastTs = cfg.lastBackupAt ? new Date(cfg.lastBackupAt).getTime() : 0;
+          const intervalMs = (cfg.autoBackupIntervalMinutes || 60) * 60 * 1000;
+          if (Date.now() - lastTs >= intervalMs) {
+            const res = await executeSupabaseBackupNow();
+            addToast(`☁️ Backup automático do Supabase salvo com sucesso (${res.snapshot?.counts.logs || 0} registros).`, 'var(--color-success)');
+          }
+        }
+      } catch (err) {
+        console.warn('Ciclo de backup automático no Supabase:', err);
+      }
+    };
+
+    const timer = setInterval(checkAndRunCloudBackup, 60000);
+    return () => clearInterval(timer);
+  }, [dbReady, addToast]);
+
   // Detecção de Modo Standalone / Iframe / TV para visualização externa
   const isStandaloneMode = useMemo(() => {
     if (typeof window === 'undefined') return false;
@@ -229,13 +255,7 @@ export default function App() {
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, []);
 
-  const updateScreensaverEnabled = (enabled: boolean) => {
-    storeUpdateScreensaverEnabled(enabled, addToast);
-  };
 
-  const updateScreensaverTimeout = (timeout: number) => {
-    storeUpdateScreensaverTimeout(timeout, addToast);
-  };
 
   // Temporal Filter State for Dashboard
   const [temporalPeriod, setTemporalPeriod] = useState<PeriodType>('todos');
@@ -292,38 +312,6 @@ export default function App() {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
-
-  // Idle timer for Screensaver (Desativado se screensaverEnabled for falso)
-  useEffect(() => {
-    if (!screensaverEnabled) {
-      if (screensaverActive) {
-        setScreensaverActive(false);
-      }
-      return;
-    }
-    if (screensaverActive) return;
-
-    let idleTimer: any;
-
-    const resetIdleTimer = () => {
-      clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        if (screensaverEnabled) {
-          setScreensaverActive(true);
-        }
-      }, screensaverTimeout * 60 * 1000);
-    };
-
-    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
-    events.forEach(evt => window.addEventListener(evt, resetIdleTimer));
-
-    resetIdleTimer();
-
-    return () => {
-      clearTimeout(idleTimer);
-      events.forEach(evt => window.removeEventListener(evt, resetIdleTimer));
-    };
-  }, [screensaverEnabled, screensaverTimeout, screensaverActive, setScreensaverActive]);
 
   // Initialize DB and load session state
   useEffect(() => {
@@ -878,6 +866,24 @@ export default function App() {
     }
   };
 
+  // Detecção de Modo TV Direto (URL ?mode=tv ou ?tv=1) - Acesso público sem barreira de login para Smart TVs
+  const isTvParamDirect = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('mode') === 'tv' || params.get('tv') === 'true' || params.get('tv') === '1';
+  }, []);
+
+  if (isTvParamDirect) {
+    return (
+      <TvRadarModule
+        isStandalone={true}
+        onClose={() => {
+          window.location.href = window.location.pathname;
+        }}
+      />
+    );
+  }
+
   if (loadingUser) {
     return (
       <div className="terminal-root min-h-screen flex flex-col items-center justify-center p-4">
@@ -893,50 +899,27 @@ export default function App() {
 
   const isAuthUnlocked = Boolean(user || isGuestMode);
 
-  const navigationTabs = useMemo(() => [
-    {
-      id: 'cronometro',
-      label: 'Cronômetro',
-      icon: <Clock size={15} className={activeTab === 'cronometro' ? 'text-black' : 'text-emerald-400'} />,
-      badge: 'Livre'
-    },
-    {
-      id: 'ruas',
-      label: 'Reabastecimento por Rua',
-      icon: <MapPin size={15} className={activeTab === 'ruas' ? 'text-black' : 'text-emerald-400'} />,
-      badge: 'Livre'
-    },
-    {
-      id: 'apoio',
-      label: 'Apoio Reabastecimento',
-      icon: <ScanLine size={15} className={activeTab === 'apoio' ? 'text-black' : 'text-emerald-400'} />,
-      badge: 'PoC Offline'
-    },
-    {
-      id: 'gestao',
-      label: 'Gestão & Sheets',
-      icon: <Layers size={15} className={activeTab === 'gestao' ? 'text-black' : 'text-emerald-400'} />,
-      badge: 'PC / Web'
-    },
-    {
-      id: 'painel',
-      label: 'Painel Gráfico',
-      icon: <LayoutDashboard size={15} className={activeTab === 'painel' ? 'text-black' : 'text-emerald-400'} />,
-      badge: isAuthUnlocked ? 'Liberado' : 'Login'
-    },
-    {
-      id: 'historico',
-      label: 'Histórico de Logs',
-      icon: <History size={15} className={activeTab === 'historico' ? 'text-black' : 'text-emerald-400'} />,
-      badge: isAuthUnlocked ? 'Liberado' : 'Login'
-    },
-    {
-      id: 'followup',
-      label: 'Follow-up Semanal',
-      icon: <CalendarClock size={15} className={activeTab === 'followup' ? 'text-black' : 'text-emerald-400'} />,
-      badge: isAuthUnlocked ? 'Liberado' : 'Login'
+  // Filter tabs based on auth status
+  const navigationTabs = useMemo(() => {
+    const allTabs = [
+      { id: 'cronometro', label: 'Cronômetro', icon: <Clock size={15} /> },
+      { id: 'ruas', label: 'Reabastecimento por Rua', icon: <MapPin size={15} /> },
+      { id: 'artigos', label: 'Artigos & Auditoria CTN', icon: <FileSpreadsheet size={15} /> },
+      { id: 'tv', label: 'Modo TV (Rastreio Ao Vivo)', icon: <Tv size={15} /> },
+      { id: 'apoio', label: 'Apoio Reabastecimento', icon: <ScanLine size={15} /> },
+      { id: 'gestao', label: 'Gestão & Sheets', icon: <Layers size={15} /> },
+      { id: 'painel', label: 'Painel Gráfico', icon: <LayoutDashboard size={15} /> },
+      { id: 'historico', label: 'Histórico de Logs', icon: <History size={15} /> },
+      { id: 'followup', label: 'Follow-up Semanal', icon: <CalendarClock size={15} /> }
+    ];
+
+    if (!isAuthUnlocked) {
+      return allTabs.filter(tab => !['gestao', 'historico', 'followup'].includes(tab.id));
     }
-  ], [activeTab, isAuthUnlocked]);
+    return allTabs;
+  }, [isAuthUnlocked]);
+
+  const activeTabDetails = navigationTabs.find(t => t.id === activeTab) || navigationTabs[0];
 
   // Global keyboard shortcut for AS/400 Theme & Functions
   useEffect(() => {
@@ -959,7 +942,9 @@ export default function App() {
   }, [toggleTheme, addToast, sincronizarFila]);
 
   return (
-    <div className={`terminal-root ${theme === 'as400' ? 'theme-as400' : ''} p-2 sm:p-4 md:p-8 flex flex-col items-center relative overflow-hidden min-h-screen`}>
+    <div className={`terminal-root ${theme === 'as400' ? 'theme-as400' : ''} p-2 flex flex-col items-center relative overflow-hidden min-h-screen`}>
+      
+      {/* ... (Keep background spheres as is) ... */}
       
       {/* Dynamic Parallax Floating Background Spheres (Disabled in AS/400 mode) */}
       {theme !== 'as400' && (
@@ -985,28 +970,8 @@ export default function App() {
         </>
       )}
 
-      {/* AS/400 CRT TOP SYSTEM LINE */}
-      {theme === 'as400' && (
-        <div className="w-full max-w-6xl mb-2 px-3 py-1 bg-black border border-[#00ff66] text-[#00ff66] font-mono text-[0.68rem] flex justify-between items-center tracking-widest uppercase">
-          <span>IBM 5250 REPRO WMS // ESTAÇÃO: WS01</span>
-          <span className="hidden sm:inline">DATA: {new Date().toLocaleDateString('pt-PT')}</span>
-          <span>OPERADOR: {activeOperator || 'GUEST'}</span>
-        </div>
-      )}
-
-      {/* Global Supabase Loading Progress and Spinner feedback */}
-      {supabaseLoading && (
-        <div className="fixed top-0 left-0 w-full z-50 pointer-events-none">
-          <div className="h-1 bg-gradient-to-r from-transparent via-emerald-400 to-transparent animate-pulse w-full"></div>
-          <div className="absolute right-4 top-4 flex items-center gap-2 bg-black/90 border border-emerald-500/50 px-3 py-1.5 rounded-xl text-[10px] font-mono text-emerald-400 shadow-2xl backdrop-blur-md">
-            <Loader2 size={12} className="animate-spin text-emerald-400" />
-            CONECTANDO AO SUPABASE...
-          </div>
-        </div>
-      )}
-      
-      {/* Toast Alert stack overlay */}
-      <div className="fixed bottom-6 right-6 flex flex-col gap-2 z-50 pointer-events-none">
+      {/* Global Toast Alert stack overlay */}
+      <div className="fixed bottom-4 right-4 flex flex-col gap-2 z-50 pointer-events-none">
         {toasts.map(t => (
           <div
             key={t.id}
@@ -1018,269 +983,165 @@ export default function App() {
         ))}
       </div>
 
-      <div className="w-full max-w-6xl space-y-6 relative z-10">
+      <div className="w-full max-w-6xl space-y-4 relative z-10">
         
-        {/* MODO STANDALONE / EMBED / TV (SITE EXTERNO) */}
-        {isStandaloneMode ? (
-          <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-slate-950/90 border border-cyan-500/30 rounded-2xl backdrop-blur-md shadow-xl gap-3">
+        {/* NOVO CABEÇALHO REESTRUTURADO // REAPRO COMMAND COCKPIT */}
+        <header className="p-3.5 bg-slate-950/90 border border-white/15 rounded-2xl shadow-2xl backdrop-blur-xl space-y-3 relative overflow-hidden">
+          {/* Top Line: Brand identity + Sector badge + System quick actions */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
             <div className="flex items-center gap-3">
-              <div className="w-3 h-3 rounded-full bg-cyan-400 shadow-lg shadow-cyan-500/50 animate-pulse shrink-0" />
-              <div>
-                <h1 className="text-sm md:text-base font-black tracking-wider uppercase text-white font-mono flex items-center gap-2">
-                  <span>TERMINAL REPRO</span>
-                  <span className="text-cyan-400 text-xs font-normal">// Torre de Gestão</span>
-                </h1>
-                <p className="text-[0.60rem] text-slate-400 font-mono flex items-center gap-2">
-                  <span className="text-emerald-400 font-bold">● TEMPO REAL (READ-ONLY)</span>
-                  <span>•</span>
-                  <span>Última Sincronização: <strong className="text-white">{lastSyncTime || 'Ao vivo'}</strong></span>
-                </p>
+              <div className="flex items-center gap-2.5">
+                <div className="relative flex items-center justify-center">
+                  <div className="w-3 h-3 rounded-full bg-emerald-400 animate-ping absolute opacity-60" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h1 className="font-mono text-sm font-black text-white tracking-widest uppercase">
+                      REAPRO <span className="text-emerald-400">TORRE 5.0</span>
+                    </h1>
+                    <span className="text-[0.55rem] font-bold font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                      LIVE
+                    </span>
+                  </div>
+                  <p className="text-[0.6rem] text-slate-400 font-mono">
+                    Terminal Logístico &amp; Controle Operacional de Produtividade
+                  </p>
+                </div>
+              </div>
+
+              {/* Setor Ativo Quick Selector Pills */}
+              <div className="hidden sm:flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-white/10 text-xs font-mono">
+                <span className="text-slate-400 text-[0.55rem] uppercase px-1.5 font-bold">Setor:</span>
+                {SECTOR_OPTIONS.map(opt => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => updateActiveSector(opt.id, addToast)}
+                    className={`px-2 py-0.5 rounded-lg text-[0.62rem] font-bold transition-all cursor-pointer ${
+                      activeSectorId === opt.id
+                        ? 'bg-emerald-500 text-black shadow-sm font-black'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                    title={opt.description}
+                  >
+                    {opt.shortLabel}
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div className="flex items-center flex-wrap gap-2 text-xs font-mono">
-              {networkStatus === 'online' ? (
-                <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-lg flex items-center gap-1.5 text-[0.65rem]">
-                  <Wifi size={11} />
-                  <span>ONLINE</span>
-                </span>
-              ) : (
-                <span className="text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-lg flex items-center gap-1.5 text-[0.65rem]">
-                  <WifiOff size={11} />
-                  <span>OFFLINE</span>
-                </span>
-              )}
+            {/* Right Status Badges & Quick Actions */}
+            <div className="flex items-center gap-2">
+              {/* Active Stopwatch Ticker */}
+              <button
+                type="button"
+                onClick={() => handleTabChange('cronometro')}
+                className={`px-3 py-1.5 rounded-xl border text-xs font-mono font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                  timerState.cronometro?.ativo
+                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-md shadow-emerald-500/10 animate-pulse'
+                    : (timerState.cronometro?.segundos || 0) > 0
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                    : 'bg-black/40 border-white/10 text-slate-400 hover:text-white'
+                }`}
+                title={timerState.cronometro?.ativo ? 'Cronômetro em execução - clique para alternar para a aba' : 'Cronômetro pausado / pronto'}
+              >
+                <Clock size={13} className={timerState.cronometro?.ativo ? 'text-emerald-400 animate-spin' : ''} />
+                <span>{timerState.cronometro?.ativo ? formatTime(timerState.cronometro?.segundos || 0) : '00:00:00'}</span>
+                {timerState.cronometro?.ativo && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                )}
+              </button>
 
+              {/* Botão de Acesso Rápido ao Modo TV */}
+              <button
+                id="btn-header-modo-tv"
+                type="button"
+                onClick={() => handleTabChange('tv')}
+                className={`px-2.5 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 transition-all cursor-pointer font-mono font-bold ${
+                  activeTab === 'tv'
+                    ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/20 font-black'
+                    : 'bg-cyan-500/10 border-cyan-500/30 hover:bg-cyan-500/20 text-cyan-300'
+                }`}
+                title="Modo TV: Transmissão em tempo real e rastreio de operacão em qualquer tela"
+              >
+                <Tv size={13} className={activeTab === 'tv' ? 'text-slate-950' : 'text-cyan-400 animate-pulse'} />
+                <span className="hidden sm:inline text-[0.65rem]">Modo TV</span>
+              </button>
+
+              {/* Google Sheets Sync Pill */}
+              <button
+                type="button"
+                onClick={() => sincronizarFila(true)}
+                disabled={isSyncing}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-white/10 hover:border-emerald-500/40 text-xs text-slate-300 hover:text-emerald-300 flex items-center gap-1.5 transition-all cursor-pointer font-mono"
+                title="Sincronizar com a Planilha Google (F5)"
+              >
+                <Cloud size={13} className={isSyncing ? 'animate-spin text-emerald-400' : 'text-slate-400'} />
+                <span className="hidden md:inline text-[0.62rem] font-bold">
+                  {isSyncing ? 'Sincronizando...' : `${syncedCount}/${logs.length}`}
+                </span>
+              </button>
+
+              {/* Theme Toggle Button */}
               <button
                 type="button"
                 onClick={() => toggleTheme(addToast)}
-                className={`px-3 py-1.5 border text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer transition-all ${
-                  theme === 'as400'
-                    ? 'bg-emerald-500 text-black border-emerald-400 font-black shadow-md'
-                    : 'bg-slate-900 border-purple-500/40 text-purple-300 hover:bg-purple-500/10'
-                }`}
-                title="Alternar Tema: IBM AS/400 5250 (Fósforo Verde) vs Torre Obsidian (Alt+T)"
+                className="p-1.5 rounded-xl bg-slate-900 border border-white/10 hover:border-cyan-500/40 text-slate-300 hover:text-cyan-300 text-xs transition-all cursor-pointer"
+                title="Mudar Tema (Modo Moderno / IBM AS/400) [Alt+T]"
               >
-                <Terminal size={12} className={theme === 'as400' ? 'text-black' : 'text-purple-400'} />
-                <span>{theme === 'as400' ? 'IBM AS/400' : 'Tema AS/400'}</span>
+                <Terminal size={14} />
               </button>
 
-              <button
-                type="button"
-                onClick={() => setShowHelpModal(true)}
-                className="px-3 py-1.5 bg-slate-900 border border-emerald-500/40 hover:bg-emerald-500/10 text-emerald-300 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer transition-all"
-                title="Abrir Central de Ajuda e Documentação"
+              {/* Active Operator Badge */}
+              <div 
+                className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-900 border border-white/10 text-xs font-mono cursor-pointer hover:border-white/20"
+                onClick={() => handleTabChange('cronometro')}
+                title="Operador Ativo"
               >
-                <HelpCircle size={12} className="text-emerald-400" />
-                <span>Ajuda</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => sincronizarFila(false)}
-                disabled={isSyncing}
-                className="px-3 py-1.5 bg-slate-900 border border-cyan-500/40 hover:bg-cyan-500/10 text-cyan-300 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
-                title="Atualizar dados da nuvem agora"
-              >
-                <RefreshCw size={12} className={isSyncing ? 'animate-spin text-cyan-400' : ''} />
-                <span>{isSyncing ? 'Atualizando...' : 'Atualizar Dados'}</span>
-              </button>
-
-              <a
-                href={typeof window !== 'undefined' ? window.location.pathname : '#'}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-1.5 bg-white/5 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all"
-                title="Abrir Terminal Operacional Completo"
-              >
-                <ExternalLink size={12} />
-                <span>Abrir Terminal</span>
-              </a>
+                <User size={13} className="text-emerald-400" />
+                <span className="text-[0.62rem] font-bold text-slate-200 max-w-[100px] truncate">
+                  {activeOperator || 'SEM OPERADOR'}
+                </span>
+              </div>
             </div>
-          </header>
-        ) : (
-          <>
-            {/* CABEÇALHO ORGÂNICO */}
-            <header className="relative flex flex-col md:flex-row justify-between border-b border-white/10 pb-5 items-start md:items-end gap-4">
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-3 h-3 rounded-full bg-emerald-400 shadow-lg shadow-emerald-500/50 animate-pulse" />
-                  <h1 className="text-xl md:text-2xl font-black tracking-widest uppercase text-white font-sans">
-                    REPRO <span className="text-emerald-400 font-mono text-base font-normal opacity-80">// Torre de Comando</span>
-                  </h1>
-                </div>
-                <p className="text-[0.62rem] text-slate-400 uppercase tracking-wider font-mono flex items-center gap-2">
-                  <span>Motor v5.0 Cloud</span>
-                  <span className="text-white/20">•</span>
-                  <span className="text-emerald-400/90 font-bold">Obsidian Matte & Esmeralda</span>
-                </p>
-              </div>
-              
-              <div className="flex flex-col items-start md:items-end gap-2 text-[0.6rem] font-mono tracking-wider">
-                {/* Status Pills */}
-                <div className="flex flex-wrap items-center gap-2">
-                  {networkStatus === 'online' ? (
-                    <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                      <Wifi size={11} />
-                      <span>ONLINE</span>
-                    </span>
-                  ) : (
-                    <span className="text-slate-400 font-bold bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                      <WifiOff size={11} />
-                      <span>OFFLINE</span>
-                    </span>
-                  )}
-                  
-                  <span className="text-slate-300 bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                    <Database size={11} />
-                    <span>IndexedDB</span>
-                  </span>
-                  
-                  {apiUrl ? (
-                    unsyncedCount > 0 ? (
-                      <span className="text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-2.5 py-0.5 rounded-full animate-pulse flex items-center gap-1.5">
-                        <Cloud size={11} />
-                        <span>{unsyncedCount} Pendentes</span>
-                      </span>
-                    ) : (
-                      <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                        <Cloud size={11} />
-                        <span>Sheets OK</span>
-                      </span>
-                    )
-                  ) : (
-                    <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                      <Cloud size={11} />
-                      <span>Configurar Sheets</span>
-                    </span>
-                  )}
+          </div>
 
-                  {user ? (
-                    <span className="text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                      <Cloud size={11} />
-                      <span>PostgreSQL Cloud</span>
-                    </span>
-                  ) : (
-                    <span className="text-slate-400 bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                      <Cloud size={11} />
-                      <span>Modo Local</span>
-                    </span>
-                  )}
-                </div>
-
-                {/* Ações de Restauração, Auto-Backup & Sessão */}
-                <div className="flex flex-wrap items-center gap-2 mt-1 justify-start md:justify-end">
-                  {/* Cronômetro de Contagem Regressiva para Backup Automático do IndexedDB */}
+          {/* Navigation Bar ("Algo Novo") - Segmented capsule dock with icons & active glow */}
+          <nav className="flex items-center justify-between gap-1 overflow-x-auto scrollbar-thin pt-0.5">
+            <div className="flex items-center gap-1.5 w-full">
+              {navigationTabs.map(tab => {
+                const isActive = activeTab === tab.id;
+                const isTimerActive = tab.id === 'cronometro' && timerState.cronometro?.ativo;
+                return (
                   <button
+                    key={tab.id}
                     type="button"
-                    onClick={() => handleTriggerIndexedDbBackup(false)}
-                    disabled={isDbBackingUp}
-                    className={`px-2 md:px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-mono font-bold flex items-center gap-1.5 shadow-sm text-[0.6rem] ${
-                      backupCountdown <= 10
-                        ? 'bg-amber-500/25 border-amber-400 text-amber-200 animate-pulse ring-2 ring-amber-400/40'
-                        : 'bg-white/5 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20'
+                    onClick={() => handleTabChange(tab.id as TabType)}
+                    className={`px-3 py-2 rounded-xl text-xs font-mono font-bold uppercase flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                      isActive
+                        ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-black shadow-lg shadow-emerald-500/25 scale-[1.02]'
+                        : 'bg-slate-900/80 border border-white/10 text-slate-400 hover:text-white hover:bg-slate-800 hover:border-white/20'
                     }`}
-                    title="Contagem regressiva para o próximo backup automático do IndexedDB. Clique para fazer backup agora."
                   >
-                    <Database size={11} className={backupCountdown <= 10 ? 'text-amber-400 animate-bounce' : 'text-emerald-400'} />
-                    <span>
-                      {isDbBackingUp 
-                        ? 'GRAVANDO...' 
-                        : `BACKUP DB: ${Math.floor(backupCountdown / 60)}:${(backupCountdown % 60).toString().padStart(2, '0')}`}
+                    <span className={isActive ? 'text-black' : 'text-slate-400'}>
+                      {tab.icon}
                     </span>
+                    <span className="text-[0.65rem] tracking-wider">{tab.label}</span>
+                    {isTimerActive && !isActive && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    )}
+                    {isActive && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-black/60" />
+                    )}
                   </button>
+                );
+              })}
+            </div>
+          </nav>
+        </header>
 
-                  <button
-                    type="button"
-                    onClick={() => toggleTheme(addToast)}
-                    className={`px-2 md:px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1 md:gap-1.5 shadow-sm text-[0.6rem] ${
-                      theme === 'as400'
-                        ? 'bg-emerald-500 text-black border-emerald-400 font-black'
-                        : 'bg-white/5 border-purple-500/30 text-purple-300 hover:bg-purple-500/20'
-                    }`}
-                    title="Alternar Tema: IBM AS/400 5250 (Fósforo Verde) vs Torre Obsidian (Alt+T)"
-                  >
-                    <Terminal size={11} className={theme === 'as400' ? 'text-black' : 'text-purple-400'} />
-                    <span className="hidden md:inline">{theme === 'as400' ? 'IBM AS/400' : 'TEMA AS/400'}</span>
-                  </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setShowHelpModal(true)}
-                    className="px-2 md:px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/60 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1 md:gap-1.5 shadow-sm text-[0.6rem]"
-                    title="Central de Ajuda, Atalhos do Coletor e Documentação"
-                  >
-                    <HelpCircle size={11} className="text-emerald-400" />
-                    <span className="hidden md:inline">Ajuda</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => updateScreensaverEnabled(!screensaverEnabled)}
-                    className={`px-2 md:px-2.5 py-1 border rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1 md:gap-1.5 shadow-sm text-[0.6rem] ${
-                      screensaverEnabled
-                        ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
-                        : 'bg-white/5 border-white/15 text-slate-400 hover:text-white'
-                    }`}
-                    title={screensaverEnabled ? 'Descanso de Tela ATIVADO (Clique para desligar)' : 'Descanso de Tela DESLIGADO (Clique para ligar)'}
-                  >
-                    <Moon size={11} className={screensaverEnabled ? 'text-purple-400' : 'text-slate-400'} />
-                    <span className="hidden md:inline">Descanso: {screensaverEnabled ? 'LIGADO' : 'OFF'}</span>
-                  </button>
-
-                  <button
-                    onClick={handleRestoreSystem}
-                    disabled={isSyncing}
-                    className="px-2 md:px-2.5 py-1 bg-white/5 border border-white/15 text-slate-200 hover:text-emerald-400 hover:border-emerald-500/40 rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold flex items-center gap-1 md:gap-1.5 shadow-sm"
-                    title="Restaura o sistema, diagnostica base de dados e reconecta sincronização"
-                  >
-                    <RefreshCw size={11} className={isSyncing ? 'animate-spin text-emerald-400' : ''} />
-                    <span className="hidden md:inline">Restaurar Sistema</span>
-                  </button>
-
-                  {user ? (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-slate-400 text-[0.55rem] md:text-xs">
-                        <span className="hidden md:inline">OPERADOR: </span><strong className="text-white uppercase">{user.user_metadata?.full_name || user.email?.split('@')[0]}</strong>
-                      </span>
-                      <button
-                        onClick={() => {
-                          localStorage.removeItem('repro_local_user');
-                          setUser(null);
-                          addToast("Sessão terminada.", 'var(--color-info)');
-                        }}
-                        className="px-2 py-1 bg-white/5 border border-white/10 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 rounded-lg cursor-pointer transition-all text-xs"
-                      >
-                        SAIR
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        setIsGuestMode(false);
-                        localStorage.setItem('repro_guest_mode', 'false');
-                      }}
-                      className="px-2 md:px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-black rounded-lg cursor-pointer transition-all uppercase tracking-wider font-bold text-[0.6rem] md:text-xs"
-                    >
-                      LOGIN ⚡
-                    </button>
-                  )}
-                </div>
-                
-                <div className="text-slate-500 text-right text-[0.55rem]">
-                  ÚLTIMA SINCRONIZAÇÃO: <span className="text-slate-400 font-bold">{lastSyncTime}</span>
-                </div>
-              </div>
-            </header>
-
-            {/* NAVEGAÇÃO DE ABAS RESPONSIVA COM BEAD DESLIZANTE (PC, MOBILE & PDT ZEBRA) */}
-            <TabBarBead
-              tabs={navigationTabs}
-              activeId={activeTab}
-              onChange={(id) => handleTabChange(id as TabType)}
-            />
-          </>
-        )}
 
         {/* CONTEÚDO DINÂMICO DE ACORDO COM A ABA ATIVA */}
         
@@ -1426,6 +1287,34 @@ export default function App() {
           </div>
         )}
 
+        {/* ABA: ARTIGOS, ENDEREÇOS E AUDITORIA DE CTN (100% LOCAL SEGURO) */}
+        {activeTab === 'artigos' && (
+          <div className="animate-fade-in">
+            <ErrorBoundary fallbackTitle="Auditoria de Artigo, Endereço e CTN">
+              <ArticleAddressAuditModule
+                logs={logs}
+                onNavigateToStreet={(st) => {
+                  handleTabChange('ruas');
+                  addToast(`Foco direcionado para a rua ${st}`, 'var(--color-info)');
+                }}
+                onNotify={(msg, color) => addToast(msg, color || 'var(--color-info)')}
+              />
+            </ErrorBoundary>
+          </div>
+        )}
+
+        {/* ABA: MODO TV - RASTREIO OPERACIONAL E TRANSMISSÃO EM TEMPO REAL */}
+        {activeTab === 'tv' && (
+          <div className="animate-fade-in">
+            <ErrorBoundary fallbackTitle="Modo TV - Radar de Reabastecimento em Tempo Real">
+              <TvRadarModule
+                isStandalone={false}
+                onClose={() => handleTabChange('ruas')}
+              />
+            </ErrorBoundary>
+          </div>
+        )}
+
         {/* ABA: APOIO OFFLINE AO REABASTECIMENTO (PROVA DE CONCEITO - PDT / COLETOR) */}
         {activeTab === 'apoio' && (
           <div className="animate-fade-in">
@@ -1448,23 +1337,36 @@ export default function App() {
           </div>
         )}
 
-        {/* ABA 3: GESTÃO / AUDITORIA / SHEETS (ACESSO LIVRE / MÓDULO WEB & PC) */}
+        {/* ABA: GESTÃO / AUDITORIA / SHEETS (PROTEGIDO POR LOGIN) */}
         {activeTab === 'gestao' && (
-          <div className="animate-fade-in">
-            <ErrorBoundary fallbackTitle="Módulo de Gestão & Sheets">
-              <ManagementModule
-                logs={logs}
-                activeSectorId={activeSectorId}
-                apiUrl={apiUrl}
-                onApiUrlChange={handleApiUrlChange}
-                onAddToast={addToast}
-                lastSyncTimestamp={lastSyncTime || undefined}
-                isSyncing={isSyncing}
-                onTriggerSync={() => syncMultiDevice({ forceAlert: true })}
-                networkStatus={networkStatus}
-              />
-            </ErrorBoundary>
-          </div>
+          !isAuthUnlocked ? (
+            <AuthLoginCard
+              requestedTabName="Gestão & Sheets"
+              onNavigateToTab={(t) => handleTabChange(t)}
+              onLoginSuccess={(u) => {
+                setUser(u);
+                localStorage.setItem('repro_local_user', JSON.stringify(u));
+              }}
+              onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
+              onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
+            />
+          ) : (
+            <div className="animate-fade-in">
+              <ErrorBoundary fallbackTitle="Módulo de Gestão & Sheets">
+                <ManagementModule
+                  logs={logs}
+                  activeSectorId={activeSectorId}
+                  apiUrl={apiUrl}
+                  onApiUrlChange={handleApiUrlChange}
+                  onAddToast={addToast}
+                  lastSyncTimestamp={lastSyncTime || undefined}
+                  isSyncing={isSyncing}
+                  onTriggerSync={() => syncMultiDevice({ forceAlert: true })}
+                  networkStatus={networkStatus}
+                />
+              </ErrorBoundary>
+            </div>
+          )
         )}
 
         {/* ABA 4: PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
@@ -1629,21 +1531,7 @@ export default function App() {
 
       </div>
 
-      {screensaverEnabled && screensaverActive && (
-        <Screensaver
-          onClose={() => setScreensaverActive(false)}
-          logs={logs}
-          currentUser={currentUser}
-          currentRole={currentRole}
-        />
-      )}
-
       {/* CENTRAL DE AJUDA & DOCUMENTAÇÃO */}
-      <HelpSupportModal
-        isOpen={showHelpModal}
-        onClose={() => setShowHelpModal(false)}
-        apiUrl={apiUrl}
-      />
 
       {/* SOLICITAÇÃO DE PEDIDO - FLOATING BUTTON */}
       <FormModalFloatingButton />

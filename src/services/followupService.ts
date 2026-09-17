@@ -131,7 +131,7 @@ export function computeOperatorsSummary(weekLogs: Log[]): OperatorSummary[] {
  * Computes Weekly Consolidation for all logs
  */
 export function computeWeeklyConsolidation(logs: Log[]): WeeklyConsolidation[] {
-  const uniqueWeeks = Array.from(new Set(logs.map(l => l.semana))).sort((a, b) => b - a);
+  const uniqueWeeks = Array.from(new Set(logs.map(l => l.semana).filter((s): s is number => typeof s === 'number'))).sort((a, b) => b - a);
 
   return uniqueWeeks.map(wk => {
     const wLogs = logs.filter(l => l.semana === wk);

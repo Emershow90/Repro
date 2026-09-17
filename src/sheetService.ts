@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Log } from './types';
-import { saveLog, getLogs, getUnsyncedLogs, saveLogsBulk } from './dbLocal';
+import { Log, AuditLog } from './types';
+import { saveLog, getLogs, getUnsyncedLogs, saveLogsBulk, getAuditLogs, deleteAuditLog } from './services/dbLocal';
 import { saveLogsDirectly, fetchLogsDirectly } from './utils/supabase/client';
 import { getWeekNumber, parseDateString, getDayOfWeekName } from './utils/dateUtils';
 import { normalizeSectorId } from './utils/logUtils';
@@ -782,4 +782,37 @@ export async function fetchFromCloud(apiUrl: string, userUid?: string): Promise<
   }
 
   throw new Error('Não foi possível obter dados da nuvem ou do Google Sheets. Verifique a URL do Google Apps Script.');
+}
+
+export async function syncAuditLogsToSheets(apiUrlInput: string): Promise<number> {
+  const apiUrl = normalizeSheetUrl(apiUrlInput);
+  const auditLogs = await getAuditLogs();
+  const unsynced = auditLogs.filter(a => !a.synced);
+  
+  if (unsynced.length === 0) return 0;
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      redirect: 'follow',
+      body: JSON.stringify({
+        action: 'insert_audit',
+        payload: JSON.stringify(unsynced)
+      })
+    });
+
+    const text = await response.text();
+    const result = JSON.parse(text);
+
+    if (result.status === 'sucesso' || result.status === 'OK') {
+      for (const log of unsynced) {
+        await deleteAuditLog(log.id);
+      }
+      return unsynced.length;
+    }
+  } catch (e) {
+    console.error("Erro na sync de auditoria:", e);
+  }
+  return 0;
 }

@@ -31,7 +31,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     return { hasError: true, error, errorInfo: null };
   }
 
-  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+  public override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("ErrorBoundary caught an error:", error, errorInfo);
     this.setState({ errorInfo });
   }
@@ -40,7 +40,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     this.setState({ hasError: false, error: null, errorInfo: null });
   };
 
-  public render() {
+  public override render() {
     if (this.state.hasError) {
       return (
         <div className="p-6 border border-rose-500/30 bg-rose-950/20 rounded-2xl text-white font-mono space-y-4 my-4">

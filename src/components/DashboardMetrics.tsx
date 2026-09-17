@@ -54,10 +54,10 @@ export default function DashboardMetrics({ logs }: MetricsProps) {
       bgGlow: 'from-blue-500/10 to-transparent'
     },
     {
-      title: 'VPH Direto (Net)',
-      subtitle: 'Produtividade Pura',
+      title: 'Produtividade Direta (VPH)',
+      subtitle: 'Vol/h (Volumes por Hora Líquida)',
       value: vphDiretoVal,
-      unit: 'VOL/H',
+      unit: 'Vol/h (VPH)',
       icon: TrendingUp,
       color: 'text-emerald-400',
       borderGlow: 'hover:border-emerald-500/40',
@@ -65,10 +65,10 @@ export default function DashboardMetrics({ logs }: MetricsProps) {
       highlight: true
     },
     {
-      title: 'VPH Geral (Bruto)',
-      subtitle: 'Eficiência Total',
+      title: 'Produtividade Geral (VPH/UPH)',
+      subtitle: 'Vol/h & Unid/h Bruto Total',
       value: vphGeralVal,
-      unit: 'VOL/H',
+      unit: 'Vol/h (VPH)',
       icon: Gauge,
       color: 'text-slate-200',
       borderGlow: 'hover:border-slate-500/40',
@@ -88,44 +88,36 @@ export default function DashboardMetrics({ logs }: MetricsProps) {
             Métricas de Desempenho da Sessão
           </h2>
         </div>
-        <span className="text-xs text-slate-400 font-mono bg-white/5 px-2.5 py-1 rounded-full border border-white/5">
+        <span className="text-[0.6rem] text-slate-400 font-mono bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
           {logs.length} {logs.length === 1 ? 'registo' : 'registos'}
         </span>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
+      <div className="grid grid-cols-2 gap-2">
         {cards.map((c, i) => {
           const Icon = c.icon;
           return (
             <div
               key={i}
-              className={`relative p-4 rounded-xl border border-white/10 bg-gradient-to-b ${c.bgGlow} bg-black/40 backdrop-blur-md ${c.borderGlow} transition-all duration-300 hover:-translate-y-1 hover:shadow-lg group ${
-                c.highlight ? 'ring-2 ring-emerald-500/50 bg-emerald-950/20' : ''
-              } ${i === 4 ? 'col-span-2 md:col-span-1' : ''}`}
+              className={`p-2 rounded-lg border border-white/10 bg-black/40 ${i === 4 ? 'col-span-2' : ''}`}
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-slate-300">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[0.6rem] font-medium text-slate-400 uppercase tracking-wider">
                   {c.title}
                 </span>
-                <div className={`p-1.5 rounded-lg bg-white/5 border border-white/5 ${c.color} group-hover:scale-110 transition-transform`}>
-                  <Icon size={16} />
-                </div>
+                <Icon size={12} className={c.color} />
               </div>
 
               <div className="flex items-baseline gap-1">
-                <p className={`text-xl font-extrabold font-mono tracking-tight ${c.color}`}>
+                <p className={`text-lg font-bold font-mono ${c.color}`}>
                   {c.value}
                 </p>
                 {c.unit && (
-                  <span className="text-xs font-mono text-slate-400 font-bold ml-1">
+                  <span className="text-[0.5rem] font-mono text-slate-500">
                     {c.unit}
                   </span>
                 )}
               </div>
-
-              <p className="text-[0.7rem] text-slate-400 mt-1 font-mono">
-                {c.subtitle}
-              </p>
             </div>
           );
         })}

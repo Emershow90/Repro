@@ -33,10 +33,13 @@ import {
   Target,
   Zap,
   BellRing,
-  ScanLine
+  ScanLine,
+  ShieldCheck
 } from 'lucide-react';
 import ReproCalculatorModal from './ReproCalculatorModal';
 import OfflineReplenishmentAssistant from './OfflineReplenishmentAssistant';
+import { FiveSVisualReminder } from './FiveSVisualReminder';
+import { sendTelemetryHeartbeat } from '../services/telemetryService';
 import { 
   calculateDurationFromTimes, 
   formatDateToBR, 
@@ -54,7 +57,7 @@ import {
   inferSectorFromStreet 
 } from '../data/streetData';
 import { pdtAudio } from '../utils/pdtAudio';
-import { saveState, getState, enqueueOperationalEvent } from '../dbLocal';
+import { saveState, getState, enqueueOperationalEvent } from '../services/dbLocal';
 import { useUIStore } from '../stores/uiStore';
 
 interface StreetReplenishmentModuleProps {
@@ -489,6 +492,29 @@ export default function StreetReplenishmentModule({
           totalRealizadoAteAgora: historicalStreetVolumesToday + nextVol
         });
       }
+
+      // Transmite a telemetria em tempo real para o Modo TV / Servidor
+      const totalVolNow = historicalStreetVolumesToday + nextVol;
+      const vphEstimate = swSecs > 10 ? ((totalVolNow / swSecs) * 3600).toFixed(1) : '0.0';
+      const ephEstimate = swSecs > 10 ? ((nextAddr / swSecs) * 3600).toFixed(1) : '0.0';
+
+      sendTelemetryHeartbeat({
+        operador: activeOperator,
+        setor: inferSectorFromStreet(stName),
+        rua: stName,
+        status: swActive ? 'EM_ANDAMENTO' : 'PAUSADO',
+        volumes: totalVolNow,
+        enderecos: nextAddr,
+        demanda: demandValue || 60,
+        unidade: unit,
+        tempoSegundos: swSecs,
+        vph: vphEstimate,
+        eph: ephEstimate,
+        ultimaAcao: events.length > 0
+          ? `Bipe na rua ${stName} (+${events[events.length - 1].volumesDelta} vol)`
+          : `Rua ${stName} em operação`,
+        ultimoBipeTs: now
+      }).catch(() => {});
     } catch (err) {
       console.error('Erro ao persistir ActiveSession no IndexedDB', err);
     }
@@ -522,6 +548,28 @@ export default function StreetReplenishmentModule({
           setCurrentAddressSeconds(elapsedSinceLastAddr);
         } else {
           setCurrentAddressSeconds(secs);
+        }
+
+        // Transmissão contínua em tempo real para o Modo TV a cada 3 segundos
+        if (secs % 3 === 0) {
+          const totVol = historicalStreetVolumesToday + volumeCount;
+          const vphEst = secs > 10 ? ((totVol / secs) * 3600).toFixed(1) : '0.0';
+          const ephEst = secs > 10 ? ((addressCount / secs) * 3600).toFixed(1) : '0.0';
+          sendTelemetryHeartbeat({
+            operador: activeOperator,
+            setor: inferSectorFromStreet(effectiveStreet),
+            rua: effectiveStreet,
+            status: 'EM_ANDAMENTO',
+            volumes: totVol,
+            enderecos: addressCount,
+            demanda: demandValue || 60,
+            unidade: unidadeRealizado,
+            tempoSegundos: secs,
+            vph: vphEst,
+            eph: ephEst,
+            ultimaAcao: `Reapro operando na rua ${effectiveStreet}`,
+            ultimoBipeTs: now
+          }).catch(() => {});
         }
 
         // TEOREMA DE COX: Avaliação bayesiana de probabilidade de clique esquecido
@@ -1287,6 +1335,13 @@ export default function StreetReplenishmentModule({
         </div>
       )}
 
+      {/* LEMBRETE 5S DEGRADÊ NA RUA ATIVA */}
+      <FiveSVisualReminder
+        activeStreet={effectiveStreet}
+        activeSector={inferredSector}
+        onNotify={onAddToast}
+      />
+
       {/* 1. PAINEL DE CONTEXTO & CONTROLE (SETOR / RUA / STATUS / CRONÔMETRO) */}
       <div className="p-2.5 rounded-xl bg-slate-950 border border-white/15 shadow-md flex flex-wrap items-center justify-between gap-2">
         
@@ -1431,7 +1486,19 @@ export default function StreetReplenishmentModule({
             </span>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => {
+                useUIStore.getState().handleTabChange('artigos');
+              }}
+              className="px-2.5 py-1 rounded bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 text-[0.65rem] font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
+              title="Abrir o Validador de Auditoria Planilha vs. Sistema Real"
+            >
+              <ShieldCheck size={11} className="text-indigo-400" />
+              <span>Validador Planilha x Real</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setShowCalculatorModal(true)}

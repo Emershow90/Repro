@@ -30,7 +30,7 @@ import {
   HelpCircle 
 } from 'lucide-react';
 import { As400ConnectionConfig, OfflineReplenishmentRecord, As400AuditComparisonRow } from '../types';
-import { getState, saveState } from '../dbLocal';
+import { getState, saveState } from '../services/dbLocal';
 import { WMS_QUERIES } from './OdbcQueryBridge';
 
 interface As400ConfigModuleProps {

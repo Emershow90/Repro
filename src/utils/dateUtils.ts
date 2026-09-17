@@ -169,3 +169,18 @@ export function adjustTimeMinutes(timeStr: string, minutesToAdd: number): string
   const newM = totalMins % 60;
   return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
 }
+
+/**
+ * Formats seconds into HH:MM:SS string.
+ */
+export function formatTime(secs: number): string {
+  const hoursVal = Math.floor(secs / 3600);
+  const minutesVal = Math.floor((secs % 3600) / 60);
+  const secondsVal = secs % 60;
+  
+  const hStr = hoursVal < 10 ? `0${hoursVal}` : `${hoursVal}`;
+  const mStr = minutesVal < 10 ? `0${minutesVal}` : `${minutesVal}`;
+  const sStr = secondsVal < 10 ? `0${secondsVal}` : `${secondsVal}`;
+  
+  return `${hStr}:${mStr}:${sStr}`;
+}

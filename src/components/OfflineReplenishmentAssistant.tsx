@@ -48,7 +48,7 @@ import {
 } from '../types';
 import { DEFAULT_REPLENISHMENT_CATALOG, findArticleInCatalog } from '../data/mockReplenishmentCatalog';
 import { pdtAudio } from '../utils/pdtAudio';
-import { getState, saveState } from '../dbLocal';
+import { getState, saveState } from '../services/dbLocal';
 import { useUIStore } from '../stores/uiStore';
 
 interface OfflineReplenishmentAssistantProps {

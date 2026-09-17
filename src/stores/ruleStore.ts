@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { initDb } from '../dbLocal';
+import { initDb } from '../services/dbLocal';
 
 export interface ValidationRule {
   id: string;

@@ -12,7 +12,7 @@ interface VphChartProps {
 
 export default function VphChart({ logs }: VphChartProps) {
   // Get unique weeks from logs, sorted ascending
-  const uniqueWeeks = [...new Set(logs.map(l => l.semana))].sort((a, b) => a - b);
+  const uniqueWeeks = [...new Set(logs.map(l => l.semana).filter((s): s is number => typeof s === 'number'))].sort((a, b) => a - b);
 
   if (uniqueWeeks.length < 2) {
     return (
@@ -91,7 +91,7 @@ export default function VphChart({ logs }: VphChartProps) {
             <ChartIcon size={14} />
           </div>
           <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
-            Evolução de Produtividade (VPH)
+            Evolução de Produtividade - Vol/h (VPH)
           </h2>
         </div>
         <div className="flex gap-3 text-[0.6rem] font-bold tracking-wider font-mono">

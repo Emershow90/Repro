@@ -12,7 +12,7 @@ import {
   syncOfflineQueue, 
   fetchFromCloud 
 } from '../sheetService';
-import { saveLog, getLogs } from '../dbLocal';
+import { saveLog, getLogs } from '../services/dbLocal';
 import { 
   TrendingUp, 
   Layers, 
@@ -32,10 +32,12 @@ import {
   ExternalLink,
   FileSpreadsheet,
   FileText,
-  ChevronDown
+  ChevronDown,
+  FileDown
 } from 'lucide-react';
 
 import { getWeekNumber } from '../utils/dateUtils';
+import { generateWeeklyReportPdf } from '../utils/pdfWeeklyReport';
 
 interface WeeklyFollowupTabProps {
   logs: Log[];
@@ -55,11 +57,11 @@ export default function WeeklyFollowupTab({
   const { activeSectorId, updateActiveSector } = useSectorStore();
 
   // Available weeks list from logs
-  const weeksList = Array.from(new Set(logs.map(l => l.semana))).sort((a, b) => b - a);
+  const weeksList = Array.from(new Set(logs.map(l => l.semana).filter((s): s is number => typeof s === 'number'))).sort((a, b) => b - a);
 
   // Selected week state
   const [selectedWeek, setSelectedWeek] = useState<number>(() => {
-    if (weeksList.length > 0) return weeksList[0];
+    if (weeksList.length > 0 && typeof weeksList[0] === 'number') return weeksList[0];
     return getWeekNumber(new Date());
   });
 
@@ -70,6 +72,7 @@ export default function WeeklyFollowupTab({
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
 
   // File input ref for CSV/JSON import
@@ -247,6 +250,33 @@ export default function WeeklyFollowupTab({
     document.body.removeChild(link);
 
     onAddToast('Ficheiro JSON exportado com sucesso!', 'var(--color-success)');
+  };
+
+  const handleExportPDF = () => {
+    setShowExportMenu(false);
+    if (weekLogs.length === 0 && operatorsSummary.length === 0) {
+      onAddToast('Não existem registos nesta semana para gerar o relatório PDF.', 'var(--color-warning)');
+      return;
+    }
+
+    setIsExportingPdf(true);
+    try {
+      generateWeeklyReportPdf({
+        selectedWeek,
+        weekPeriodStr,
+        activeSectorId,
+        kpis,
+        operatorsSummary,
+        activitiesSummary,
+        streetSummary: streetFollowupSummary
+      });
+      onAddToast(`Relatório Semanal em PDF (Semana ${selectedWeek}) gerado com sucesso!`, 'var(--color-success)');
+    } catch (err: any) {
+      console.error('Erro ao gerar relatório semanal PDF:', err);
+      onAddToast(`Falha ao gerar PDF: ${err?.message || 'Erro no documento'}`, 'var(--color-danger)');
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   const handleFileUpload = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -692,6 +722,16 @@ export default function WeeklyFollowupTab({
 
           <div className="flex flex-wrap items-center gap-2 pt-1 relative">
             <button
+              onClick={handleExportPDF}
+              disabled={isExportingPdf}
+              className="px-3.5 py-1.5 text-[0.6rem] font-bold uppercase tracking-wider bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-sm cursor-pointer transition-all flex items-center gap-1.5 shadow-sm"
+              title="Gerar relatório semanal formatado em PDF para gestores"
+            >
+              <FileDown size={12} className={isExportingPdf ? 'animate-bounce' : ''} />
+              <span>{isExportingPdf ? 'Gerando PDF...' : 'Relatório PDF (Gestão)'}</span>
+            </button>
+
+            <button
               onClick={handleGenerateWeekImage}
               className="px-3.5 py-1.5 text-[0.6rem] font-bold uppercase tracking-wider bg-terminal-accent text-black hover:bg-terminal-accent/90 rounded-sm cursor-pointer transition-all flex items-center gap-1.5 shadow-sm"
             >
@@ -719,10 +759,17 @@ export default function WeeklyFollowupTab({
               </button>
 
               {showExportMenu && (
-                <div className="absolute right-0 bottom-full mb-1 w-44 bg-terminal-panel border border-terminal-border shadow-xl rounded-sm z-50 overflow-hidden font-mono text-[0.65rem]">
+                <div className="absolute right-0 bottom-full mb-1 w-52 bg-terminal-panel border border-terminal-border shadow-xl rounded-sm z-50 overflow-hidden font-mono text-[0.65rem]">
+                  <button
+                    onClick={handleExportPDF}
+                    className="w-full text-left px-3 py-2 text-rose-400 hover:bg-terminal-bg hover:text-rose-300 transition-colors flex items-center gap-2"
+                  >
+                    <FileDown size={12} />
+                    <span>Relatório PDF (Gestão)</span>
+                  </button>
                   <button
                     onClick={handleExportCSV}
-                    className="w-full text-left px-3 py-2 text-white hover:bg-terminal-bg hover:text-terminal-accent transition-colors flex items-center gap-2"
+                    className="w-full text-left px-3 py-2 text-white hover:bg-terminal-bg hover:text-terminal-accent transition-colors flex items-center gap-2 border-t border-terminal-border/30"
                   >
                     <Download size={12} />
                     <span>Exportar CSV</span>
@@ -769,17 +816,17 @@ export default function WeeklyFollowupTab({
           </p>
         </div>
 
-        {/* Card 3 */}
+        {/* Card 3 - VPH (Volumes por Hora) & UPH (Unidades por Hora) */}
         <div className="bg-terminal-panel/15 border border-terminal-border/30 p-5 rounded-sm relative overflow-hidden group">
           <span className="absolute right-3 top-3 text-terminal-accent opacity-20 group-hover:opacity-40 transition-opacity">
             <TrendingUp size={28} />
           </span>
           <p className="text-[0.55rem] uppercase text-terminal-text opacity-50 font-mono tracking-wider">📈 Produtividade Líquida</p>
-          <p className="text-2xl font-bold text-terminal-accent tracking-wider mt-2">
-            {kpis.vphNet} <span className="text-xs text-terminal-text opacity-50">VPH</span>
+          <p className="text-2xl font-bold text-terminal-accent tracking-wider mt-2 flex items-baseline gap-1.5">
+            {kpis.vphNet} <span className="text-[0.65rem] text-terminal-text font-normal">Vol/h (VPH)</span>
           </p>
-          <p className="text-[0.5rem] text-terminal-text/60 mt-1 font-mono uppercase tracking-widest">
-            VPH Bruto: {kpis.vphBruto}
+          <p className="text-[0.5rem] text-terminal-text/80 mt-1 font-mono uppercase tracking-widest">
+            Volumes por Hora: <strong className="text-emerald-400">{kpis.vphNet} VPH</strong> | Unid/Hora: <strong className="text-purple-400">{(parseFloat(kpis.vphNet || '0') * 1.0).toFixed(1)} UPH</strong>
           </p>
         </div>
 
@@ -802,9 +849,12 @@ export default function WeeklyFollowupTab({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left Table: Activities */}
         <div className="border border-terminal-border/30 p-5 rounded-sm bg-terminal-panel/5 space-y-4">
-          <h3 className="text-xs font-bold text-white uppercase tracking-widest border-b border-terminal-border/30 pb-2 flex items-center gap-1.5">
-            <BarChart2 size={13} className="text-terminal-accent" />
-            <span>Resumo de Atividades Executadas (Semana {selectedWeek})</span>
+          <h3 className="text-xs font-bold text-white uppercase tracking-widest border-b border-terminal-border/30 pb-2 flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <BarChart2 size={13} className="text-terminal-accent" />
+              <span>Resumo de Atividades Executadas (Semana {selectedWeek})</span>
+            </div>
+            <span className="text-[0.55rem] text-terminal-text/60 font-mono">Vol/h = Volumes por Hora</span>
           </h3>
 
           <div className="overflow-x-auto scrollbar-thin">
@@ -814,7 +864,7 @@ export default function WeeklyFollowupTab({
                   <th className="pb-2 font-medium">Atividade</th>
                   <th className="pb-2 text-right font-medium">Endereços</th>
                   <th className="pb-2 text-right font-medium">Horas</th>
-                  <th className="pb-2 text-right font-medium text-terminal-accent">Produtividade</th>
+                  <th className="pb-2 text-right font-medium text-terminal-accent">Produtividade (VPH)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-terminal-border/10 text-[0.65rem] text-terminal-text/80">
@@ -829,7 +879,7 @@ export default function WeeklyFollowupTab({
                     </td>
                     <td className="py-2.5 text-right font-bold text-warning">{act.horas.toFixed(2)}h</td>
                     <td className="py-2.5 text-right font-bold text-terminal-accent">
-                      {act.isInd ? 'INDIRETA' : `${act.vph} VPH`}
+                      {act.isInd ? 'INDIRETA' : `${act.vph} Vol/h (VPH)`}
                     </td>
                   </tr>
                 ))}
@@ -847,10 +897,21 @@ export default function WeeklyFollowupTab({
 
         {/* Right Table: Operator Performance Ranking */}
         <div className="border border-terminal-border/30 p-5 rounded-sm bg-terminal-panel/5 space-y-4">
-          <h3 className="text-xs font-bold text-white uppercase tracking-widest border-b border-terminal-border/30 pb-2 flex items-center gap-1.5">
-            <ListOrdered size={13} className="text-terminal-accent" />
-            <span>Desempenho de Operadores (Semana {selectedWeek})</span>
-          </h3>
+          <div className="flex items-center justify-between border-b border-terminal-border/30 pb-2">
+            <h3 className="text-xs font-bold text-white uppercase tracking-widest flex items-center gap-1.5">
+              <ListOrdered size={13} className="text-terminal-accent" />
+              <span>Desempenho de Operadores (Semana {selectedWeek})</span>
+            </h3>
+            <button
+              onClick={handleExportPDF}
+              disabled={isExportingPdf}
+              className="text-[0.55rem] font-bold text-rose-400 hover:text-rose-300 font-mono uppercase flex items-center gap-1 cursor-pointer"
+              title="Exportar esta tabela em PDF"
+            >
+              <FileDown size={11} />
+              <span>Exportar PDF</span>
+            </button>
+          </div>
 
           <div className="overflow-x-auto scrollbar-thin">
             <table className="w-full text-left text-xs whitespace-nowrap font-mono">
@@ -859,7 +920,8 @@ export default function WeeklyFollowupTab({
                   <th className="pb-2 font-medium">Operador</th>
                   <th className="pb-2 text-right font-medium">Endereços</th>
                   <th className="pb-2 text-right font-medium">Horas Totais</th>
-                  <th className="pb-2 text-right font-medium text-terminal-accent">Produtividade</th>
+                  <th className="pb-2 text-right font-medium text-terminal-accent" title="Volumes por Hora">Volumes/Hora (VPH)</th>
+                  <th className="pb-2 text-right font-medium text-purple-400" title="Unidades por Hora">Unid/Hora (UPH)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-terminal-border/10 text-[0.65rem] text-terminal-text/80">
@@ -876,13 +938,16 @@ export default function WeeklyFollowupTab({
                       {op.hTot.toFixed(2)}h
                     </td>
                     <td className="py-2.5 text-right font-bold text-terminal-accent">
-                      {op.vphNet} VPH
+                      {op.vphNet} Vol/h
+                    </td>
+                    <td className="py-2.5 text-right font-bold text-purple-400">
+                      {(parseFloat(op.vphNet || '0') * 1.0).toFixed(2)} Unid/h
                     </td>
                   </tr>
                 ))}
                 {operatorsSummary.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="text-center py-6 text-terminal-text opacity-40 italic">
+                    <td colSpan={5} className="text-center py-6 text-terminal-text opacity-40 italic">
                       Nenhum colaborador com registos nesta semana.
                     </td>
                   </tr>

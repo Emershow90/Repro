@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
-import { saveLog, deleteLog } from '../dbLocal';
+import { saveLog, deleteLog } from '../services/dbLocal';
 import { saveLogsDirectly } from '../utils/supabase/client';
 import { EventBus } from '../eventBus';
 import { 
@@ -123,7 +123,7 @@ export default function HistoryTab({
       return false;
     }
     // 3. Semana Filter
-    if (selectedWeek && log.semana.toString() !== selectedWeek) {
+    if (selectedWeek && String(log.semana ?? '') !== selectedWeek) {
       return false;
     }
     // 4. Date range filter

@@ -192,7 +192,7 @@ export async function fetchLogsDirectly(userUid: string): Promise<Log[]> {
       return [];
     }
 
-    return (data || []).map(item => ({
+    return (data || []).map((item: any) => ({
       id: item.id,
       data: item.data,
       dia: item.dia,
