@@ -29,7 +29,8 @@ export default function RankingTable({ logs }: RankingTableProps) {
   });
 
   const rankList = Object.values(operatorsMap).map(o => {
-    o.vph = o.hrs > 0 ? o.vol / o.hrs : 0;
+    const calcVph = o.hrs > 0 ? o.vol / o.hrs : 0;
+    o.vph = isFinite(calcVph) ? calcVph : 0;
     return o;
   });
 
@@ -43,22 +44,27 @@ export default function RankingTable({ logs }: RankingTableProps) {
   });
 
   return (
-    <section className="border-panel p-5 md:p-6 rounded-2xl relative overflow-hidden">
-      <div className="flex justify-between items-center mb-4 border-b border-white/10 pb-3">
+    <section className="repro-card p-4 sm:p-5 rounded-2xl relative overflow-hidden">
+      <div className="flex flex-wrap justify-between items-center gap-2 mb-4 border-b border-white/10 pb-3">
         <div className="flex items-center gap-2">
           <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
             <Trophy size={14} />
           </div>
-          <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
-            Ranking de Performance
-          </h2>
+          <div>
+            <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+              Ranking de Produtividade Individual
+            </h2>
+            <p className="text-[0.62rem] text-slate-400 font-sans">
+              Classificação dos operadores por taxa de caixas/hora (VPH) e volumes totais
+            </p>
+          </div>
         </div>
         <div className="flex gap-1.5 bg-black/40 p-1 rounded-xl border border-white/10 font-mono">
           <button
             onClick={() => setOrderBy('vph')}
             className={`text-[0.62rem] px-2.5 py-1 rounded-lg cursor-pointer transition-all font-bold uppercase ${
               orderBy === 'vph'
-                ? 'bg-emerald-500 text-black shadow-sm'
+                ? 'bg-emerald-500 text-black shadow-sm font-black'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -68,7 +74,7 @@ export default function RankingTable({ logs }: RankingTableProps) {
             onClick={() => setOrderBy('vol')}
             className={`text-[0.62rem] px-2.5 py-1 rounded-lg cursor-pointer transition-all font-bold uppercase ${
               orderBy === 'vol'
-                ? 'bg-emerald-500 text-black shadow-sm'
+                ? 'bg-emerald-500 text-black shadow-sm font-black'
                 : 'text-slate-400 hover:text-white'
             }`}
           >

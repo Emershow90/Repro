@@ -412,7 +412,7 @@ export default function StopwatchPanel({
         {/* ========================================================================= */}
         {/* PAINEL 1: OPERADOR, SETOR & CONFIGURAÇÃO */}
         {/* ========================================================================= */}
-        <section className={`border-panel p-4 sm:p-5 rounded-2xl flex flex-col justify-between ${pdtMode ? 'space-y-3.5' : 'space-y-5'} relative overflow-hidden bg-slate-900/90 shadow-lg`}>
+        <section className={`repro-card p-4 sm:p-5 rounded-2xl flex flex-col justify-between ${pdtMode ? 'space-y-3.5' : 'space-y-5'} relative overflow-hidden`}>
           <div className={`${pdtMode ? 'space-y-3' : 'space-y-4'}`}>
             
             {/* OPERADOR ATIVO */}
@@ -568,9 +568,9 @@ export default function StopwatchPanel({
         </section>
 
         {/* ========================================================================= */}
-        {/* PAINEL 2: REGISTO DE ATIVIDADE & DISPLAY DO CRONÔMETRO */}
+        {/* PAINEL 2: REGISTRO DE ATIVIDADE & DISPLAY DO CRONÔMETRO */}
         {/* ========================================================================= */}
-        <section className={`border-panel p-4 sm:p-5 rounded-2xl flex flex-col justify-between relative overflow-hidden bg-slate-900/90 shadow-lg ${pdtMode ? 'space-y-3.5' : 'space-y-5'}`}>
+        <section className={`repro-card p-4 sm:p-5 rounded-2xl flex flex-col justify-between relative overflow-hidden ${pdtMode ? 'space-y-3.5' : 'space-y-5'}`}>
           <div>
             {/* HEADER COM SELETOR DE MODO */}
             <div className="flex flex-wrap justify-between items-center mb-3 gap-2 border-b border-white/10 pb-2">
@@ -578,8 +578,8 @@ export default function StopwatchPanel({
                 <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                   <Layers size={14} />
                 </div>
-                <h2 className="text-xs font-bold text-white uppercase tracking-wider">
-                  2. Registo de Atividade
+                <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                  2. Registro de Atividade
                 </h2>
               </div>
 

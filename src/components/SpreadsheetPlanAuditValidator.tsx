@@ -108,16 +108,25 @@ export const SpreadsheetPlanAuditValidator: React.FC<SpreadsheetPlanAuditValidat
   const [quickArtigo, setQuickArtigo] = useState<string>('');
   const [quickEndereco, setQuickEndereco] = useState<string>('');
 
-  // Demandas do REPRO do IndexedDB
+  // Demandas do REPRO do Google Sheets
   const [reproDemands, setReproDemands] = useState<Record<string, any>>({});
 
   useEffect(() => {
     (async () => {
       try {
-        const saved = await getState<Record<string, any>>(STORAGE_DEMANDS_KEY);
-        if (saved) setReproDemands(saved);
+        const response = await fetch(process.env.GOOGLE_SHEETS_API_URL!);
+        const data = await response.json();
+        // Google Sheets API returns array of arrays, skip header, parse JSON string at col 2
+        const demands: Record<string, any> = {};
+        for (let i = 1; i < data.length; i++) {
+          if (data[i][1]) {
+            const rowData = JSON.parse(data[i][1]);
+            Object.assign(demands, rowData);
+          }
+        }
+        setReproDemands(demands);
       } catch (err) {
-        console.warn('Erro ao carregar demandas do REPRO:', err);
+        console.warn('Erro ao carregar demandas do Google Sheets:', err);
       }
     })();
   }, []);
@@ -570,7 +579,7 @@ export const SpreadsheetPlanAuditValidator: React.FC<SpreadsheetPlanAuditValidat
             data: selectedDate,
             artigo: artigo || 'ART-GERAL',
             endereco: endereco || `${rua}-01`,
-            ctn: caixas,
+            ctn: String(caixas),
             rua: rua || 'B4VD',
             setor,
             hora: '08:00',
@@ -630,7 +639,7 @@ export const SpreadsheetPlanAuditValidator: React.FC<SpreadsheetPlanAuditValidat
       data: selectedDate,
       artigo: art,
       endereco: end,
-      ctn: cx,
+      ctn: String(cx),
       rua: quickRua.toUpperCase(),
       setor,
       hora: '08:00',

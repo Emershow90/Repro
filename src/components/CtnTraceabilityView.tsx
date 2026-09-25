@@ -24,8 +24,12 @@ import {
   History,
   Tag
 } from 'lucide-react';
-import { CtnGenealogyReport, CtnArticleNode, Log, AuditLog } from '../types';
-import { searchCtnGenealogy, getRecentCtnsAndArticles, deleteAuditLog } from '../services/dbLocal';
+import { CtnGenealogyReport, CtnArticleNode } from '../types';
+import { 
+  getRecentCtnsAndArticles, 
+  searchCtnGenealogy, 
+  deleteAuditLog 
+} from '../services/dbLocal';
 
 interface CtnTraceabilityViewProps {
   initialCtn?: string;
@@ -41,11 +45,11 @@ export const CtnTraceabilityView: React.FC<CtnTraceabilityViewProps> = ({
   onAddToast
 }) => {
   const [searchTerm, setSearchTerm] = useState(initialCtn);
-  const [isSearching, setIsSearching] = useState(false);
   const [report, setReport] = useState<CtnGenealogyReport | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
-  const [expandedArticles, setExpandedArticles] = useState<Record<string, boolean>>({});
   const [recentItems, setRecentItems] = useState<{ ctns: string[]; artigos: string[] }>({ ctns: [], artigos: [] });
+  const [expandedArticles, setExpandedArticles] = useState<Record<string, boolean>>({});
   const [activeSubTab, setActiveSubTab] = useState<'arvore' | 'auditoria' | 'bruto'>('arvore');
 
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -83,7 +87,7 @@ export const CtnTraceabilityView: React.FC<CtnTraceabilityViewProps> = ({
       if (result) {
         // Expandir por padrão o primeiro artigo
         const initialExpanded: Record<string, boolean> = {};
-        result.artigos.forEach((art, idx) => {
+        result.artigos.forEach((art: CtnArticleNode, idx: number) => {
           initialExpanded[art.artigo] = idx === 0 || result.artigos.length <= 3;
         });
         setExpandedArticles(initialExpanded);
@@ -302,7 +306,7 @@ export const CtnTraceabilityView: React.FC<CtnTraceabilityViewProps> = ({
               <History size={12} className="text-slate-500" />
               Recentes:
             </span>
-            {recentItems.ctns.map(ctn => (
+            {recentItems.ctns.map((ctn: string) => (
               <button
                 key={ctn}
                 type="button"
@@ -315,7 +319,7 @@ export const CtnTraceabilityView: React.FC<CtnTraceabilityViewProps> = ({
                 {ctn}
               </button>
             ))}
-            {recentItems.artigos.slice(0, 4).map(art => (
+            {recentItems.artigos.slice(0, 4).map((art: string) => (
               <button
                 key={art}
                 type="button"

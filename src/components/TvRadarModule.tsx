@@ -36,23 +36,29 @@ import {
   Box,
   Compass,
   Eye,
-  Sliders
+  Sliders,
+  FileSpreadsheet,
+  ListChecks
 } from 'lucide-react';
+import { useTvRadar } from '../hooks/useTvRadar';
 import {
-  subscribeToTelemetry,
   fetchNetworkInfo,
   triggerTelemetrySimulation,
-  LiveTelemetrySnapshot,
+  subscribeToTelemetry,
   NetworkInfo,
-  TelemetryPayload
+  LiveTelemetrySnapshot,
+  TelemetryHistoryItem
 } from '../services/telemetryService';
 import {
   SECTOR_STREET_GROUPS,
   SECTOR_87_STREETS,
   SECTOR_88_STREETS,
   SECTOR_89_STREETS,
-  SECTOR_90_STREETS
+  SECTOR_90_STREETS,
+  inferSectorFromStreet
 } from '../data/streetData';
+import Warehouse3DViewer from './Warehouse3DViewer';
+import ReplenishmentDetailsModal from './ReplenishmentDetailsModal';
 
 interface TvRadarModuleProps {
   onClose?: () => void;
@@ -60,6 +66,10 @@ interface TvRadarModuleProps {
 }
 
 export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandalone = false }) => {
+  // 0. Modo de Exibição da Tela TV (Planta 3D / Split / Radar 2D)
+  const [tvDisplayMode, setTvDisplayMode] = useState<'3D' | 'SPLIT' | 'RADAR_2D'>('3D');
+  const [showDetailsModal, setShowDetailsModal] = useState<boolean>(false);
+
   // 1. Estado da Telemetria, Conexão e Polling em Tempo Real
   const [telemetry, setTelemetry] = useState<LiveTelemetrySnapshot | null>(null);
   const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
@@ -259,11 +269,62 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
     return `${String(h).padStart(2, '0')}:${String(remM).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }, [active?.tempoSegundos]);
 
+  // Consolidados Totais do Reabastecimento (Respondendo: Quanto tempo fez? Quantos endereços geral ou por rua?)
+  const tempoTotalGeral = useMemo(() => {
+    let secs = active?.tempoSegundos || 0;
+    if (active?.tempoTotalGeralSegundos && active.tempoTotalGeralSegundos > secs) {
+      secs = active.tempoTotalGeralSegundos;
+    } else if (active?.historicoHoje && Array.isArray(active.historicoHoje)) {
+      for (const h of active.historicoHoje) {
+        secs += h.tempoSegundos || (h.tempoMinutos ? h.tempoMinutos * 60 : Math.round(((h.volumes || 40) / 45) * 3600));
+      }
+    }
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const totalMinutos = Math.round(secs / 60);
+    const formatted = h > 0 ? `${h}h ${m}m` : `${totalMinutos} min`;
+    return { secs, h, m, totalMinutos, formatted };
+  }, [active?.tempoSegundos, active?.tempoTotalGeralSegundos, active?.historicoHoje]);
+
+  const enderecosTotalGeral = useMemo(() => {
+    if (active?.enderecosTotalGeral && active.enderecosTotalGeral > 0) {
+      return active.enderecosTotalGeral;
+    }
+    let total = active?.enderecos || 0;
+    if (active?.historicoHoje && Array.isArray(active.historicoHoje)) {
+      for (const h of active.historicoHoje) {
+        total += h.enderecos || Math.max(1, Math.round((h.volumes || 40) / 2.3));
+      }
+    }
+    return total;
+  }, [active?.enderecos, active?.enderecosTotalGeral, active?.historicoHoje]);
+
+  const volumesTotalGeral = useMemo(() => {
+    if (active?.volumesTotalGeral && active.volumesTotalGeral > 0) {
+      return active.volumesTotalGeral;
+    }
+    let total = active?.volumes || 0;
+    if (active?.historicoHoje && Array.isArray(active.historicoHoje)) {
+      for (const h of active.historicoHoje) {
+        total += h.volumes || 0;
+      }
+    }
+    return total;
+  }, [active?.volumes, active?.volumesTotalGeral, active?.historicoHoje]);
+
+  const tempoMedioPorEnderecoFormatado = useMemo(() => {
+    if (enderecosTotalGeral <= 0 || tempoTotalGeral.secs <= 0) return '0m 00s';
+    const avgSec = Math.round(tempoTotalGeral.secs / enderecosTotalGeral);
+    const m = Math.floor(avgSec / 60);
+    const s = avgSec % 60;
+    return `${m}m ${String(s).padStart(2, '0')}s`;
+  }, [tempoTotalGeral.secs, enderecosTotalGeral]);
+
   // Lista de Ruas do Armazém com Status Operacional no Radar
   const radarStreets = useMemo(() => {
     const allGroups = SECTOR_STREET_GROUPS;
     const historyList = active?.historicoHoje || [];
-    const completedSet = new Set(historyList.map(h => h.rua.toUpperCase().trim()));
+    const completedSet = new Set(historyList.map((h: TelemetryHistoryItem) => h.rua.toUpperCase().trim()));
 
     const list: {
       rua: string;
@@ -272,13 +333,17 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
       demanda: number;
       realizado: number;
       vph?: string;
+      eph?: string;
+      enderecos?: number;
+      tempoSegundos?: number;
+      tempoFormatado?: string;
     }[] = [];
 
     allGroups.forEach(grp => {
       grp.streets.forEach(stName => {
         const isHere = stName.toUpperCase() === streetCurrent.toUpperCase();
         const isDone = completedSet.has(stName.toUpperCase());
-        const histItem = historyList.find(h => h.rua.toUpperCase() === stName.toUpperCase());
+        const histItem = historyList.find((h: TelemetryHistoryItem) => h.rua.toUpperCase() === stName.toUpperCase());
 
         let stStatus: 'AQUI_AGORA' | 'CONCLUIDA' | 'PENDENTE' | 'AGUARDANDO' = 'AGUARDANDO';
         if (isHere) {
@@ -289,19 +354,29 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
           stStatus = 'PENDENTE';
         }
 
+        const histEnderecos = histItem?.enderecos || (isDone ? Math.max(1, Math.round((histItem?.volumes || 45) / 2.3)) : 0);
+        const histTempoSec = histItem?.tempoSegundos || (histItem?.tempoMinutos ? histItem.tempoMinutos * 60 : (isDone ? 1800 : 0));
+        const histTempoMins = Math.round(histTempoSec / 60);
+
         list.push({
           rua: stName,
           setor: grp.sectorId,
           status: stStatus,
           demanda: isHere ? demandCount : (stStatus === 'CONCLUIDA' ? (histItem?.volumes || 50) : 60),
           realizado: isHere ? volumeCount : (isDone ? (histItem?.volumes || 50) : 0),
-          vph: histItem?.vph
+          vph: histItem?.vph || (isHere ? vphCurrent : '45.0'),
+          eph: histItem?.eph || (isHere ? ephCurrent : '22.0'),
+          enderecos: isHere ? addressCount : histEnderecos,
+          tempoSegundos: isHere ? (active?.tempoSegundos || 1140) : histTempoSec,
+          tempoFormatado: isHere 
+            ? `${Math.floor((active?.tempoSegundos || 1140) / 60)} min`
+            : (histTempoSec > 0 ? `${histTempoMins} min` : (isDone ? '30 min' : '-'))
         });
       });
     });
 
     return list;
-  }, [streetCurrent, sectorCurrent, demandCount, volumeCount, active?.historicoHoje]);
+  }, [streetCurrent, sectorCurrent, demandCount, volumeCount, addressCount, vphCurrent, ephCurrent, active?.tempoSegundos, active?.historicoHoje]);
 
   // Filtro de Ruas visíveis
   const filteredRadarStreets = useMemo(() => {
@@ -476,6 +551,18 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
                 <RefreshCw size={16} className={isManualRefreshing ? 'animate-spin text-cyan-400' : ''} />
               </button>
 
+              {/* Botão de Detalhamento do Reabastecimento */}
+              <button
+                id="btn-tv-replenishment-details"
+                type="button"
+                onClick={() => setShowDetailsModal(true)}
+                className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-mono font-bold transition-all shadow-[0_0_12px_rgba(16,185,129,0.25)] cursor-pointer"
+                title="Abrir Detalhamento Completo do Reabastecimento (Tempo, Endereços e Produtividade)"
+              >
+                <FileSpreadsheet size={15} />
+                <span className="hidden sm:inline">Detalhamento</span>
+              </button>
+
               {/* Botão de Áudio */}
               <button
                 id="btn-tv-audio-toggle"
@@ -545,115 +632,126 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
       </header>
 
       {/* -------------------------------------------------------------
-          2. CONTEÚDO PRINCIPAL: COCKPIT DO REAPRO + RADAR DE RUAS
+          2. CONTEÚDO PRINCIPAL: PLANTA 3D, COCKPIT DO REAPRO & RADAR
           ------------------------------------------------------------- */}
       <main className="flex-1 max-w-[1920px] w-full mx-auto p-3 md:p-6 flex flex-col gap-6">
-        {/* CARRO-CHEFE: "ONDE ESTÁ O REAPRO AGORA?" (LOCALIZAÇÃO EXATA) */}
-        <section
-          id="reapro-live-hero"
-          className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900/90 to-slate-950 border-2 border-emerald-500/40 p-5 md:p-8 shadow-[0_0_50px_rgba(16,185,129,0.15)]"
-        >
-          {/* Efeito de radar no fundo do card */}
-          <div className="absolute -right-20 -bottom-20 w-80 h-80 rounded-full border border-emerald-500/10 pointer-events-none animate-ping duration-1000" />
-          <div className="absolute right-10 top-1/2 -translate-y-1/2 opacity-5 pointer-events-none text-emerald-400">
-            <Radio size={360} />
+
+        {/* ========================================================= */}
+        {/* SELETOR DE MODO DE VISUALIZAÇÃO DA TORRE TV */}
+        {/* ========================================================= */}
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/90 p-2.5 rounded-2xl border border-white/10 backdrop-blur-md shadow-lg">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-mono text-slate-400 uppercase font-bold pl-2 hidden sm:inline">Visão TV:</span>
+            
+            <button
+              type="button"
+              onClick={() => setTvDisplayMode('3D')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-black uppercase flex items-center space-x-2 transition-all cursor-pointer ${
+                tvDisplayMode === '3D'
+                  ? 'bg-emerald-500 text-slate-950 shadow-[0_0_20px_rgba(16,185,129,0.4)] scale-[1.02]'
+                  : 'bg-slate-950 border border-white/10 text-slate-400 hover:text-white hover:bg-slate-900'
+              }`}
+            >
+              <Layers size={14} />
+              <span>1. Planta 3D (Pulmão Alto &amp; Docas)</span>
+              <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+                tvDisplayMode === '3D' ? 'bg-black/20 text-black' : 'bg-emerald-500/20 text-emerald-400'
+              }`}>
+                DIGITAL TWIN
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setTvDisplayMode('SPLIT')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-black uppercase flex items-center space-x-2 transition-all cursor-pointer ${
+                tvDisplayMode === 'SPLIT'
+                  ? 'bg-cyan-500 text-slate-950 shadow-[0_0_20px_rgba(6,182,212,0.4)] scale-[1.02]'
+                  : 'bg-slate-950 border border-white/10 text-slate-400 hover:text-white hover:bg-slate-900'
+              }`}
+            >
+              <Compass size={14} />
+              <span>2. Tela Dividida (3D + Grade 2D)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setTvDisplayMode('RADAR_2D')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-black uppercase flex items-center space-x-2 transition-all cursor-pointer ${
+                tvDisplayMode === 'RADAR_2D'
+                  ? 'bg-purple-500 text-white shadow-[0_0_20px_rgba(168,85,247,0.4)] scale-[1.02]'
+                  : 'bg-slate-950 border border-white/10 text-slate-400 hover:text-white hover:bg-slate-900'
+              }`}
+            >
+              <Radio size={14} />
+              <span>3. Radar 2D Tradicional</span>
+            </button>
           </div>
 
+          <div className="flex items-center space-x-2 text-xs font-mono text-slate-400 pr-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="hidden md:inline">Transmissão em Tempo Real</span>
+          </div>
+        </div>
+
+        {/* PLANTA 3D DO ARMAZÉM DIGITAL TWIN (PULMÃO ALTO, PICKING, DOCAS & FLUXOS) */}
+        {(tvDisplayMode === '3D' || tvDisplayMode === 'SPLIT') && (
+          <Warehouse3DViewer
+            streetCurrent={streetCurrent}
+            sectorCurrent={sectorCurrent}
+            operatorName={operatorName}
+            volumeCount={volumeCount}
+            demandCount={demandCount}
+            vphCurrent={vphCurrent}
+            selectedSectorFilter={selectedSectorFilter}
+            radarStreets={radarStreets}
+            tempoSegundos={active?.tempoSegundos || 1140}
+            enderecosCount={addressCount}
+            ephCurrent={ephCurrent}
+            tempoTotalGeralSegundos={tempoTotalGeral.secs}
+            enderecosTotalGeral={enderecosTotalGeral}
+            volumesTotalGeral={volumesTotalGeral}
+            onOpenDetails={() => setShowDetailsModal(true)}
+            onSelectStreet={(st) => setSelectedSectorFilter(inferSectorFromStreet(st))}
+          />
+        )}
+
+        {/* CARRO-CHEFE: "ONDE ESTÁ O REAPRO AGORA?" (STATUS CONCISO) */}
+        <section
+          id="reapro-live-hero"
+          className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950 border border-emerald-500/30 p-5 shadow-lg"
+        >
           <div className="relative z-10 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
-            {/* Lado Esquerdo: Localização Exata e Operador */}
-            <div className="space-y-3 max-w-2xl">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-black tracking-wider uppercase shadow-[0_0_15px_rgba(16,185,129,0.3)]">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  ONDE ESTÁ O REAPRO AGORA
-                </span>
-                <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-white/10 text-xs font-mono">
-                  DISPOSITIVO: {active?.deviceId || 'ZEBRA-01'}
-                </span>
-                <span className="px-2.5 py-1 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800 text-xs font-mono">
-                  IP: {active?.clientIp || '192.168.1.104'} ({active?.isInternalIp ? 'Rede Interna' : 'Externo'})
-                </span>
+            {/* Lado Esquerdo: Localização e Status */}
+            <div className="space-y-2">
+              <span className="flex items-center gap-1.5 text-[10px] font-mono text-emerald-400 font-bold uppercase tracking-widest">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                Operação em Tempo Real
+              </span>
+              <div className="text-5xl md:text-6xl font-black font-mono text-white tracking-tight">
+                {streetCurrent}
+                <span className="text-xl text-slate-500 ml-3 font-normal">Setor {sectorCurrent}</span>
               </div>
-
-              {/* RUA E SETOR EM DESTAQUE GIGANTE */}
-              <div className="flex flex-wrap items-baseline gap-4">
-                <div className="text-4xl sm:text-6xl md:text-7xl font-black tracking-tight text-white font-mono flex items-center gap-3">
-                  <span className="text-emerald-400 drop-shadow-[0_0_20px_rgba(16,185,129,0.5)]">
-                    {streetCurrent}
-                  </span>
-                </div>
-                <div className="text-xl sm:text-2xl font-bold text-slate-300 flex items-center gap-2">
-                  <span className="px-3 py-1 rounded-xl bg-slate-800 border border-white/10 font-mono text-cyan-300">
-                    SETOR {sectorCurrent}
-                  </span>
-                  <span className="text-slate-400 font-normal text-sm sm:text-base">
-                    ({sectorCurrent === '87' ? 'Solo' : 'Volumosos'})
-                  </span>
-                </div>
-              </div>
-
-              {/* Nome do Colaborador e Última Ação */}
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3 text-sm text-slate-300">
-                <div className="flex items-center space-x-2 bg-white/5 px-3 py-1.5 rounded-lg border border-white/10">
-                  <User size={16} className="text-cyan-400" />
-                  <span className="font-semibold text-white tracking-wide">{operatorName}</span>
-                </div>
-                <div className="flex items-center space-x-2 text-xs text-emerald-300/90 font-mono bg-emerald-950/40 px-3 py-1.5 rounded-lg border border-emerald-900/50">
-                  <Radio size={13} className="animate-pulse" />
-                  <span>{currentAction}</span>
-                </div>
+              <div className="text-sm text-slate-400 flex items-center gap-3 font-mono">
+                <span>{operatorName}</span>
+                <span className="text-slate-600">•</span>
+                <span className="text-emerald-300">{currentAction}</span>
               </div>
             </div>
 
-            {/* Lado Direito: Cronômetro da Rua, Progresso e Tacômetro */}
-            <div className="w-full lg:w-auto flex flex-col sm:flex-row lg:flex-col items-stretch sm:items-center lg:items-end gap-4 border-t lg:border-t-0 lg:border-l border-white/10 pt-4 lg:pt-0 lg:pl-8">
-              {/* Cronômetro Decorrido na Rua Atual */}
-              <div className="flex items-center justify-between sm:justify-start lg:justify-end gap-3">
-                <div className="p-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400">
-                  <Clock size={24} className="animate-spin" style={{ animationDuration: '60s' }} />
+            {/* Lado Direito: Grid de Métricas Compacto */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full lg:w-auto">
+              {[
+                { label: 'TEMPO RUA', val: formattedStopwatch, color: 'text-cyan-300' },
+                { label: 'ENDEREÇOS', val: addressCount, color: 'text-white' },
+                { label: 'VOLUMES', val: `${volumeCount}/${demandCount}`, color: 'text-emerald-300' },
+                { label: 'RITMO (CX/H)', val: vphCurrent, color: 'text-amber-300' },
+              ].map(m => (
+                <div key={m.label} className="bg-slate-950 p-3 rounded-lg border border-white/5 text-center">
+                  <div className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">{m.label}</div>
+                  <div className={`text-lg font-black font-mono ${m.color}`}>{m.val}</div>
                 </div>
-                <div>
-                  <div className="text-[10px] uppercase font-mono tracking-widest text-slate-400">
-                    Tempo na Rua Atual
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-black font-mono text-cyan-300 tracking-wider">
-                    {formattedStopwatch}
-                  </div>
-                </div>
-              </div>
-
-              {/* Progresso de Caixas da Rua Atual */}
-              <div className="bg-slate-950/80 border border-white/10 p-3.5 rounded-xl min-w-[260px] space-y-2 shadow-inner">
-                <div className="flex justify-between items-center text-xs font-mono">
-                  <span className="text-slate-400">Meta da Rua:</span>
-                  <span className="font-bold text-white">
-                    <strong className="text-emerald-400 text-base">{volumeCount}</strong> / {demandCount} cx
-                  </span>
-                </div>
-                {/* Barra de Progresso */}
-                <div className="w-full h-3 rounded-full bg-slate-800 overflow-hidden border border-white/5">
-                  <div
-                    className="h-full bg-gradient-to-r from-cyan-500 via-emerald-400 to-emerald-300 transition-all duration-500 rounded-full shadow-[0_0_10px_rgba(52,211,153,0.5)]"
-                    style={{ width: `${progressPercent}%` }}
-                  />
-                </div>
-                <div className="flex justify-between items-center text-[11px] font-mono text-slate-400">
-                  <span>{progressPercent}% Concluído</span>
-                  <span className="text-cyan-300">{addressCount} endereços visitados</span>
-                </div>
-              </div>
-
-              {/* Tacômetro de VPH / Ritmo de Reabastecimento */}
-              <div className="flex items-center gap-3 bg-white/5 px-4 py-2 rounded-xl border border-white/10">
-                <Zap size={18} className="text-amber-400" />
-                <div className="text-xs">
-                  <span className="text-slate-400">Ritmo Atual: </span>
-                  <strong className="text-amber-300 font-mono text-sm">{vphCurrent} cx/h</strong>
-                  <span className="text-slate-500 mx-1.5">•</span>
-                  <span className="text-slate-400">EPH: </span>
-                  <strong className="text-cyan-300 font-mono text-sm">{ephCurrent} end/h</strong>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </section>
@@ -737,63 +835,26 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
               return (
                 <div
                   key={item.rua}
-                  className={`relative p-3.5 rounded-xl border transition-all duration-300 flex flex-col justify-between ${
+                  className={`relative p-3 rounded-lg border flex flex-col gap-1.5 ${
                     isCurrent
-                      ? 'bg-emerald-950/80 border-emerald-400 shadow-[0_0_25px_rgba(16,185,129,0.35)] ring-2 ring-emerald-500/50 scale-[1.02] z-10'
+                      ? 'bg-emerald-950 border-emerald-400 shadow-lg ring-1 ring-emerald-500/50'
                       : isDone
-                      ? 'bg-cyan-950/30 border-cyan-500/40 text-slate-200'
-                      : isPending
-                      ? 'bg-amber-950/20 border-amber-500/30 text-slate-300'
-                      : 'bg-slate-950/50 border-white/5 text-slate-400 hover:border-white/20'
+                      ? 'bg-cyan-950/20 border-cyan-500/20'
+                      : 'bg-slate-900 border-white/5'
                   }`}
                 >
-                  {/* Radar Wave Ping se for a rua atual */}
-                  {isCurrent && (
-                    <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-500 border border-white" />
-                    </span>
-                  )}
-
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-white/5 text-slate-400">
-                      SETOR {item.setor}
-                    </span>
-                    {isCurrent && (
-                      <span className="text-[10px] font-mono font-bold text-emerald-400 uppercase tracking-wide animate-pulse">
-                        AO VIVO
-                      </span>
-                    )}
-                    {isDone && <CheckCircle2 size={14} className="text-cyan-400" />}
-                  </div>
-
-                  <div className="my-2">
-                    <div className={`text-xl sm:text-2xl font-black font-mono tracking-tight ${
-                      isCurrent ? 'text-emerald-300' : isDone ? 'text-cyan-200' : 'text-white'
-                    }`}>
+                  <div className="flex justify-between items-center">
+                    <span className={`font-black font-mono ${isCurrent ? 'text-emerald-300' : isDone ? 'text-cyan-300' : 'text-slate-200'}`}>
                       {item.rua}
-                    </div>
-                    <div className="text-[11px] font-mono text-slate-400 flex items-center justify-between mt-1">
-                      <span>{isCurrent ? 'Bipando:' : isDone ? 'Atendida:' : 'Demanda:'}</span>
-                      <strong className={isCurrent ? 'text-emerald-400' : isDone ? 'text-cyan-300' : 'text-slate-300'}>
-                        {item.realizado} / {item.demanda} cx
-                      </strong>
-                    </div>
+                    </span>
+                    {isCurrent && <span className="text-[9px] font-bold text-emerald-400 animate-pulse uppercase">LIVE</span>}
                   </div>
 
-                  {/* Barra de progresso individual da rua */}
-                  <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden mt-1">
+                  {/* Barra de progresso simplificada */}
+                  <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
                     <div
-                      className={`h-full rounded-full ${
-                        isCurrent
-                          ? 'bg-emerald-400'
-                          : isDone
-                          ? 'bg-cyan-400'
-                          : 'bg-amber-400/50'
-                      }`}
-                      style={{
-                        width: `${Math.min(100, Math.round((item.realizado / (item.demanda || 1)) * 100))}%`
-                      }}
+                      className={`h-full ${isCurrent ? 'bg-emerald-400' : isDone ? 'bg-cyan-400' : 'bg-slate-600'}`}
+                      style={{ width: `${Math.min(100, Math.round((item.realizado / (item.demanda || 1)) * 100))}%` }}
                     />
                   </div>
                 </div>
@@ -823,14 +884,19 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
             {/* Breadcrumb Steps */}
             <div className="flex flex-wrap items-center gap-2 pt-2">
               {active?.historicoHoje && active.historicoHoje.length > 0 ? (
-                active.historicoHoje.map((h, i) => (
+                active.historicoHoje.map((h: TelemetryHistoryItem, i: number) => (
                   <React.Fragment key={h.rua + i}>
                     <div className="flex items-center space-x-2 bg-slate-950/80 border border-white/10 px-3 py-2 rounded-xl text-xs font-mono">
                       <CheckCircle2 size={13} className="text-cyan-400" />
                       <div>
-                        <div className="font-bold text-white">{h.rua}</div>
+                        <div className="font-bold text-white flex items-center gap-1.5">
+                          <span>{h.rua}</span>
+                          <span className="text-[10px] text-cyan-400 font-normal">
+                            ({h.enderecos || Math.max(1, Math.round((h.volumes || 40) / 2.3))} end)
+                          </span>
+                        </div>
                         <div className="text-[10px] text-slate-400">
-                          {h.volumes} cx • {h.horario || 'Turno'}
+                          {h.volumes} cx • {h.tempoMinutos || Math.round((h.tempoSegundos || 1800) / 60)} min • {h.horario || 'Turno'}
                         </div>
                       </div>
                     </div>
@@ -875,7 +941,7 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
                 <div className="bg-slate-950/70 p-3 rounded-xl border border-white/5 space-y-1">
                   <div className="text-[10px] font-mono uppercase text-slate-400">Total Bipado Hoje</div>
                   <div className="text-2xl font-black font-mono text-emerald-400">
-                    {(active?.historicoHoje?.reduce((acc, h) => acc + (h.volumes || 0), 0) || 0) + volumeCount}
+                    {(active?.historicoHoje?.reduce((acc: number, h: TelemetryHistoryItem) => acc + (h.volumes || 0), 0) || 0) + volumeCount}
                     <span className="text-xs text-slate-400 font-normal ml-1">cx</span>
                   </div>
                 </div>
@@ -900,6 +966,211 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
             </div>
           </div>
         </div>
+
+        {/* -------------------------------------------------------------
+            5. DETALHAMENTO DO REABASTECIMENTO (QUADRO CONSOLIDADO NA TV)
+            Respondendo:
+            1. Quanto tempo (horas ou minutos) fiz o Reabastecimento?
+            2. Quantos endereços geral ou por rua?
+            3. Detalhamento do Reabastecimento por rua
+            ------------------------------------------------------------- */}
+        <section className="bg-slate-900/90 rounded-2xl border border-emerald-500/30 p-5 md:p-6 shadow-2xl space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+            <div className="flex items-center space-x-2">
+              <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                <FileSpreadsheet size={20} />
+              </div>
+              <div>
+                <h3 className="font-mono text-base md:text-lg font-black uppercase text-white tracking-wide flex items-center gap-2">
+                  <span>DETALHAMENTO DO REABASTECIMENTO</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/40">
+                    CONSOLIDADO
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400 font-mono">
+                  Visão executiva: tempo acumulado, endereços totais e desempenho por rua do armazém
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowDetailsModal(true)}
+              className="flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 text-xs font-mono font-black uppercase transition-all shadow-[0_0_20px_rgba(16,185,129,0.35)] cursor-pointer"
+            >
+              <ListChecks size={16} />
+              <span>Abrir Raio-X Detalhado Completo</span>
+            </button>
+          </div>
+
+          {/* Cards Rápidos de Resposta Direta na TV */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            <div className="bg-slate-950/80 border border-emerald-500/40 p-4 rounded-xl shadow-inner space-y-1">
+              <div className="text-[11px] font-mono uppercase text-emerald-400 flex items-center gap-1.5 font-bold">
+                <Clock size={14} />
+                <span>1. Quanto Tempo Fez?</span>
+              </div>
+              <div className="text-3xl font-black font-mono text-white">
+                {tempoTotalGeral.formatted}
+              </div>
+              <div className="text-xs font-mono text-slate-400">
+                Total de <strong className="text-emerald-300">{tempoTotalGeral.totalMinutos} minutos</strong> hoje
+              </div>
+              <div className="text-[11px] font-mono text-slate-500 pt-1 border-t border-white/5">
+                Rua atual ({streetCurrent}): {formattedStopwatch}
+              </div>
+            </div>
+
+            <div className="bg-slate-950/80 border border-cyan-500/40 p-4 rounded-xl shadow-inner space-y-1">
+              <div className="text-[11px] font-mono uppercase text-cyan-400 flex items-center gap-1.5 font-bold">
+                <MapPin size={14} />
+                <span>2. Quantos Endereços Geral?</span>
+              </div>
+              <div className="text-3xl font-black font-mono text-cyan-300">
+                {enderecosTotalGeral} <span className="text-sm font-normal text-slate-400">end</span>
+              </div>
+              <div className="text-xs font-mono text-slate-400">
+                Endereços reabastecidos no turno
+              </div>
+              <div className="text-[11px] font-mono text-cyan-400/80 pt-1 border-t border-white/5">
+                Rua atual ({streetCurrent}): {addressCount} endereços
+              </div>
+            </div>
+
+            <div className="bg-slate-950/80 border border-amber-500/40 p-4 rounded-xl shadow-inner space-y-1">
+              <div className="text-[11px] font-mono uppercase text-amber-400 flex items-center gap-1.5 font-bold">
+                <Box size={14} />
+                <span>3. Volumes Realizados</span>
+              </div>
+              <div className="text-3xl font-black font-mono text-amber-300">
+                {volumesTotalGeral} <span className="text-sm font-normal text-slate-400">cx</span>
+              </div>
+              <div className="text-xs font-mono text-slate-400">
+                Caixas bipadas e guardadas hoje
+              </div>
+              <div className="text-[11px] font-mono text-amber-400/80 pt-1 border-t border-white/5">
+                Rua atual ({streetCurrent}): {volumeCount} cx
+              </div>
+            </div>
+
+            <div className="bg-slate-950/80 border border-purple-500/40 p-4 rounded-xl shadow-inner space-y-1">
+              <div className="text-[11px] font-mono uppercase text-purple-400 flex items-center gap-1.5 font-bold">
+                <Zap size={14} />
+                <span>4. Velocidade &amp; Ritmo</span>
+              </div>
+              <div className="text-2xl font-black font-mono text-purple-200">
+                {vphCurrent} <span className="text-xs font-normal text-slate-400">cx/h</span>
+              </div>
+              <div className="text-xs font-mono text-slate-400">
+                {ephCurrent} endereços/hora
+              </div>
+              <div className="text-[11px] font-mono text-purple-400/80 pt-1 border-t border-white/5">
+                Média: {tempoMedioPorEnderecoFormatado} / endereço
+              </div>
+            </div>
+          </div>
+
+          {/* Tabela de Detalhamento por Rua Concluída & Em Andamento */}
+          <div className="overflow-x-auto rounded-xl border border-white/10 bg-slate-950/60 shadow-inner">
+            <table className="w-full text-left font-mono text-xs">
+              <thead className="bg-slate-900/90 text-slate-400 border-b border-white/10 uppercase text-[10px] tracking-wider">
+                <tr>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4">Rua</th>
+                  <th className="py-3 px-4">Setor</th>
+                  <th className="py-3 px-4">Tempo Dedicado</th>
+                  <th className="py-3 px-4">Endereços</th>
+                  <th className="py-3 px-4">Volumes</th>
+                  <th className="py-3 px-4">VPH</th>
+                  <th className="py-3 px-4">EPH</th>
+                  <th className="py-3 px-4">Média / Endereço</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {/* Rua Ativa Agora */}
+                <tr className="bg-emerald-950/30 hover:bg-emerald-950/50 transition-colors">
+                  <td className="py-3 px-4">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/40 animate-pulse">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      EM OPERAÇÃO
+                    </span>
+                  </td>
+                  <td className="py-3 px-4 font-bold text-white text-sm">
+                    {streetCurrent}
+                  </td>
+                  <td className="py-3 px-4 text-slate-300">
+                    Setor {sectorCurrent}
+                  </td>
+                  <td className="py-3 px-4 text-emerald-300 font-bold">
+                    {formattedStopwatch} ({Math.round((active?.tempoSegundos || 1140) / 60)} min)
+                  </td>
+                  <td className="py-3 px-4 text-cyan-300 font-bold">
+                    {addressCount} end
+                  </td>
+                  <td className="py-3 px-4 text-amber-300 font-bold">
+                    {volumeCount} / {demandCount} cx
+                  </td>
+                  <td className="py-3 px-4 text-slate-300">
+                    {vphCurrent} cx/h
+                  </td>
+                  <td className="py-3 px-4 text-slate-300">
+                    {ephCurrent} end/h
+                  </td>
+                  <td className="py-3 px-4 text-slate-400">
+                    {addressCount > 0 && (active?.tempoSegundos || 0) > 0
+                      ? `${Math.floor(((active?.tempoSegundos || 1140) / addressCount) / 60)}m ${Math.round(((active?.tempoSegundos || 1140) / addressCount) % 60)}s`
+                      : '0m 45s'}
+                  </td>
+                </tr>
+
+                {/* Ruas Anteriores do Turno de Hoje */}
+                {active?.historicoHoje && active.historicoHoje.map((h: TelemetryHistoryItem, idx: number) => {
+                  const sec = h.tempoSegundos || (h.tempoMinutos ? h.tempoMinutos * 60 : 1800);
+                  const min = Math.round(sec / 60);
+                  const ends = h.enderecos || Math.max(1, Math.round((h.volumes || 40) / 2.3));
+                  const avgPerEnd = ends > 0 ? Math.round(sec / ends) : 0;
+                  const avgM = Math.floor(avgPerEnd / 60);
+                  const avgS = avgPerEnd % 60;
+
+                  return (
+                    <tr key={h.rua + idx} className="hover:bg-white/5 transition-colors text-slate-300">
+                      <td className="py-3 px-4">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-cyan-950/60 text-cyan-300 text-[10px] font-bold border border-cyan-800">
+                          <CheckCircle2 size={11} className="text-cyan-400" />
+                          CONCLUÍDA
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 font-bold text-white">
+                        {h.rua}
+                      </td>
+                      <td className="py-3 px-4 text-slate-400">
+                        Setor {h.setor || inferSectorFromStreet(h.rua)}
+                      </td>
+                      <td className="py-3 px-4 text-slate-200">
+                        {min >= 60 ? `${Math.floor(min / 60)}h ${min % 60}m` : `${min} min`} ({h.horario || 'Turno'})
+                      </td>
+                      <td className="py-3 px-4 text-cyan-300 font-bold">
+                        {ends} end
+                      </td>
+                      <td className="py-3 px-4 text-amber-300 font-bold">
+                        {h.volumes} cx
+                      </td>
+                      <td className="py-3 px-4 text-slate-300">
+                        {h.vph || '48.0'} cx/h
+                      </td>
+                      <td className="py-3 px-4 text-slate-300">
+                        {h.eph || '22.0'} end/h
+                      </td>
+                      <td className="py-3 px-4 text-slate-400">
+                        {avgM}m {String(avgS).padStart(2, '0')}s
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </main>
 
       {/* -------------------------------------------------------------
@@ -997,6 +1268,13 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
           </div>
         </div>
       )}
+
+      {/* MODAL DE DETALHAMENTO DO REABASTECIMENTO (RAIO-X DE RUAS, TEMPO E ENDEREÇOS) */}
+      <ReplenishmentDetailsModal
+        isOpen={showDetailsModal}
+        onClose={() => setShowDetailsModal(false)}
+        telemetryActive={active}
+      />
     </div>
   );
 };

@@ -13,17 +13,20 @@ interface MetricsProps {
 export default function DashboardMetrics({ logs }: MetricsProps) {
   const horasDiretas = logs
     .filter(l => l.tipo !== 'indireta')
-    .reduce((acc, l) => acc + l.horas, 0);
+    .reduce((acc, l) => acc + (Number(l.horas) || 0), 0);
 
   const horasIndiretas = logs
     .filter(l => l.tipo === 'indireta')
-    .reduce((acc, l) => acc + l.horas, 0);
+    .reduce((acc, l) => acc + (Number(l.horas) || 0), 0);
 
-  const totalVolumes = logs.reduce((acc, l) => acc + l.volumes, 0);
+  const totalVolumes = logs.reduce((acc, l) => acc + (Number(l.volumes) || 0), 0);
   const totalHoras = horasDiretas + horasIndiretas;
 
-  const vphDiretoVal = horasDiretas > 0 ? (totalVolumes / horasDiretas).toFixed(2) : "0.00";
-  const vphGeralVal = totalHoras > 0 ? (totalVolumes / totalHoras).toFixed(2) : "0.00";
+  const vphDiretoCalc = horasDiretas > 0 ? totalVolumes / horasDiretas : 0;
+  const vphGeralCalc = totalHoras > 0 ? totalVolumes / totalHoras : 0;
+
+  const vphDiretoVal = isFinite(vphDiretoCalc) ? vphDiretoCalc.toFixed(1) : "0.0";
+  const vphGeralVal = isFinite(vphGeralCalc) ? vphGeralCalc.toFixed(1) : "0.0";
 
   const cards = [
     {
@@ -33,90 +36,106 @@ export default function DashboardMetrics({ logs }: MetricsProps) {
       icon: Clock,
       color: 'text-emerald-400',
       borderGlow: 'hover:border-emerald-500/40',
-      bgGlow: 'from-emerald-500/10 to-transparent'
+      bgBadge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
     },
     {
       title: 'Horas Indiretas',
-      subtitle: 'Apoio & Treino',
+      subtitle: 'Apoio & Paradas',
       value: `${horasIndiretas.toFixed(2)}h`,
       icon: Activity,
       color: 'text-amber-400',
       borderGlow: 'hover:border-amber-500/40',
-      bgGlow: 'from-amber-500/10 to-transparent'
+      bgBadge: 'bg-amber-500/10 text-amber-400 border-amber-500/20'
     },
     {
       title: 'Total Volumes',
-      subtitle: 'Endereços Concluídos',
+      subtitle: 'Caixas Concluídas',
       value: totalVolumes.toLocaleString('pt-PT'),
       icon: Box,
-      color: 'text-blue-400',
-      borderGlow: 'hover:border-blue-500/40',
-      bgGlow: 'from-blue-500/10 to-transparent'
+      color: 'text-cyan-400',
+      borderGlow: 'hover:border-cyan-500/40',
+      bgBadge: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
     },
     {
-      title: 'Produtividade Direta (VPH)',
-      subtitle: 'Vol/h (Volumes por Hora Líquida)',
+      title: 'Produtividade Direta',
+      subtitle: 'Vol/h Líquido',
       value: vphDiretoVal,
-      unit: 'Vol/h (VPH)',
+      unit: 'VPH',
       icon: TrendingUp,
       color: 'text-emerald-400',
-      borderGlow: 'hover:border-emerald-500/40',
-      bgGlow: 'from-emerald-500/15 to-transparent',
+      borderGlow: 'hover:border-emerald-500/50',
+      bgBadge: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
       highlight: true
     },
     {
-      title: 'Produtividade Geral (VPH/UPH)',
-      subtitle: 'Vol/h & Unid/h Bruto Total',
+      title: 'Produtividade Geral',
+      subtitle: 'Vol/h Total do Turno',
       value: vphGeralVal,
-      unit: 'Vol/h (VPH)',
+      unit: 'VPH Global',
       icon: Gauge,
-      color: 'text-slate-200',
-      borderGlow: 'hover:border-slate-500/40',
-      bgGlow: 'from-slate-500/10 to-transparent'
+      color: 'text-indigo-300',
+      borderGlow: 'hover:border-indigo-500/40',
+      bgBadge: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20'
     }
   ];
 
   return (
-    <section className="border-panel p-5 md:p-6 rounded-2xl relative overflow-hidden">
+    <section className="repro-card p-4 sm:p-5 rounded-2xl relative overflow-hidden">
       {/* Decorative top accent line */}
-      <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-emerald-500/40 to-transparent" />
+      <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-emerald-500/50 to-transparent" />
 
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex flex-wrap justify-between items-center gap-2 mb-4 border-b border-white/10 pb-3">
         <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
-            Métricas de Desempenho da Sessão
-          </h2>
+          <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <TrendingUp size={14} />
+          </div>
+          <div>
+            <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+              Métricas Operacionais da Sessão
+            </h2>
+            <p className="text-[0.62rem] text-slate-400 font-sans">
+              Consolidação de horas trabalhadas, volumes expedidos e taxa de rendimento (VPH)
+            </p>
+          </div>
         </div>
-        <span className="text-[0.6rem] text-slate-400 font-mono bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
-          {logs.length} {logs.length === 1 ? 'registo' : 'registos'}
+        <span className="badge-emerald">
+          {logs.length} {logs.length === 1 ? 'registro' : 'registros'}
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {cards.map((c, i) => {
           const Icon = c.icon;
           return (
             <div
               key={i}
-              className={`p-2 rounded-lg border border-white/10 bg-black/40 ${i === 4 ? 'col-span-2' : ''}`}
+              className={`repro-card-sub p-3.5 flex flex-col justify-between transition-all duration-200 ${c.borderGlow} ${
+                c.highlight ? 'border-emerald-500/30 shadow-sm shadow-emerald-500/10' : ''
+              }`}
             >
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[0.6rem] font-medium text-slate-400 uppercase tracking-wider">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[0.62rem] font-bold text-slate-400 uppercase tracking-wider font-sans">
                   {c.title}
                 </span>
-                <Icon size={12} className={c.color} />
+                <div className={`p-1 rounded-md border ${c.bgBadge}`}>
+                  <Icon size={12} />
+                </div>
               </div>
 
-              <div className="flex items-baseline gap-1">
-                <p className={`text-lg font-bold font-mono ${c.color}`}>
-                  {c.value}
+              <div className="space-y-0.5 mt-1">
+                <div className="flex items-baseline gap-1.5">
+                  <p className={`text-xl sm:text-2xl font-black font-mono tracking-tight ${c.color}`}>
+                    {c.value}
+                  </p>
+                  {c.unit && (
+                    <span className="text-[0.6rem] font-bold font-mono text-slate-400">
+                      {c.unit}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[0.58rem] text-slate-400 font-sans truncate">
+                  {c.subtitle}
                 </p>
-                {c.unit && (
-                  <span className="text-[0.5rem] font-mono text-slate-500">
-                    {c.unit}
-                  </span>
-                )}
               </div>
             </div>
           );

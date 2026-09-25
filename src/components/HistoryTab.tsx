@@ -26,10 +26,13 @@ import {
   ChevronUp,
   TrendingUp,
   Layers,
-  HelpCircle
+  HelpCircle,
+  Flame,
+  MapPin
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
+import StreetHeatmapAnalytics from './StreetHeatmapAnalytics';
 import { saveLog, deleteLog } from '../services/dbLocal';
 import { saveLogsDirectly } from '../utils/supabase/client';
 import { EventBus } from '../eventBus';
@@ -68,6 +71,9 @@ export default function HistoryTab({
   onRetrySync,
   userUid
 }: HistoryTabProps) {
+  // Sub-view mode in History
+  const [viewSection, setViewSection] = useState<'tabela' | 'ruas_tempo' | 'heatmap' | 'temporal'>('tabela');
+
   // Sector and advanced filters
   const { activeSectorId, updateActiveSector } = useSectorStore();
   const [searchTerm, setSearchTerm] = useState('');
@@ -1001,7 +1007,71 @@ export default function HistoryTab({
         </div>
       </div>
 
-      {/* 2. DYNAMIC METRICS BOARD (RESPONDS TO FILTERS) */}
+      {/* SELETOR DE MODO / VISÃO DO HISTÓRICO */}
+      <div className="flex flex-wrap items-center gap-2 bg-terminal-panel/30 p-2.5 rounded-xl border border-terminal-border/40 font-mono">
+        <button
+          type="button"
+          onClick={() => setViewSection('tabela')}
+          className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-bold uppercase rounded-lg border transition-all cursor-pointer ${
+            viewSection === 'tabela'
+              ? 'bg-terminal-accent text-black border-terminal-accent shadow-md font-black'
+              : 'bg-terminal-panel/20 border-terminal-border/40 text-terminal-text hover:text-white'
+          }`}
+        >
+          <Layers size={13} />
+          <span>Tabela Geral de Registos</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setViewSection('ruas_tempo')}
+          className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-bold uppercase rounded-lg border transition-all cursor-pointer ${
+            viewSection === 'ruas_tempo'
+              ? 'bg-cyan-500 text-black border-cyan-500 shadow-md font-black'
+              : 'bg-terminal-panel/20 border-terminal-border/40 text-cyan-300 hover:text-white'
+          }`}
+        >
+          <MapPin size={13} />
+          <span>Endereços por Rua & Tempo Gasto</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setViewSection('heatmap')}
+          className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-bold uppercase rounded-lg border transition-all cursor-pointer ${
+            viewSection === 'heatmap'
+              ? 'bg-amber-400 text-black border-amber-400 shadow-md font-black'
+              : 'bg-terminal-panel/20 border-terminal-border/40 text-amber-300 hover:text-white'
+          }`}
+        >
+          <Flame size={13} />
+          <span>Mapa de Calor (Heatmap)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setViewSection('temporal')}
+          className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-bold uppercase rounded-lg border transition-all cursor-pointer ${
+            viewSection === 'temporal'
+              ? 'bg-emerald-500 text-black border-emerald-500 shadow-md font-black'
+              : 'bg-terminal-panel/20 border-terminal-border/40 text-emerald-300 hover:text-white'
+          }`}
+        >
+          <Clock size={13} />
+          <span>Análise Temporal (Dia/Sem/Mês/Ano)</span>
+        </button>
+      </div>
+
+      {viewSection !== 'tabela' ? (
+        <StreetHeatmapAnalytics
+          logs={logs}
+          activeSectorId={activeSectorId}
+          onAddToast={onAddToast}
+          initialTab={viewSection === 'heatmap' ? 'heatmap' : viewSection === 'temporal' ? 'temporal' : 'ruas'}
+        />
+      ) : (
+        <>
+          {/* 2. DYNAMIC METRICS BOARD (RESPONDS TO FILTERS) */}
       <section className="bg-terminal-panel/10 border border-terminal-border/30 p-5 rounded-sm">
         <div className="flex items-center justify-between mb-4 border-b border-terminal-border/20 pb-2">
           <h3 className="text-[0.65rem] font-bold text-white uppercase tracking-widest flex items-center gap-1.5">
@@ -1374,6 +1444,8 @@ export default function HistoryTab({
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* --- MODAL 1: IMPORTAR PLANILHA --- */}
       {isImportModalOpen && (

@@ -24,9 +24,13 @@ import {
   saveBackupConfig, 
   executeSupabaseBackupNow, 
   listRecentCloudBackups, 
+  testSupabaseConnection,
+  restoreLatestSnapshotFromSupabase,
+  DEFAULT_BACKUP_CONFIG,
   SupabaseBackupConfig, 
   SQL_BACKUP_TABLE_SCHEMA 
 } from '../services/supabaseBackupService';
+
 
 interface SupabaseConfig {
   url: string;
@@ -67,6 +71,12 @@ export default function SupabaseConfigModule() {
   const [showSqlModal, setShowSqlModal] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
 
+  // Estados de Teste e Restauração Multi-Dispositivo
+  const [isTestingBackup, setIsTestingBackup] = useState(false);
+  const [backupTestResult, setBackupTestResult] = useState<{ success: boolean; message: string; ms?: number } | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreResult, setRestoreResult] = useState<{ success: boolean; message: string } | null>(null);
+
   const { addToast } = useUIStore();
 
   // Carregar configurações
@@ -80,6 +90,9 @@ export default function SupabaseConfigModule() {
         // Se a url ou anonKey ainda não estiverem no backup mas existirem no realtime, pré-preenche para conveniência
         if (!savedBackup.url && savedRt?.url) savedBackup.url = savedRt.url;
         if (!savedBackup.anonKey && savedRt?.anonKey) savedBackup.anonKey = savedRt.anonKey;
+        // Se ainda vazia, preenche com default env
+        if (!savedBackup.url && DEFAULT_BACKUP_CONFIG.url) savedBackup.url = DEFAULT_BACKUP_CONFIG.url;
+        if (!savedBackup.anonKey && DEFAULT_BACKUP_CONFIG.anonKey) savedBackup.anonKey = DEFAULT_BACKUP_CONFIG.anonKey;
         setBackupConfig(savedBackup);
       }
     })();
@@ -103,6 +116,54 @@ export default function SupabaseConfigModule() {
       setIsLoadingBackupsList(false);
     }
   };
+
+  const handleTestBackupConnection = async () => {
+    if (!backupConfig.url || !backupConfig.anonKey) {
+      addToast('Informe URL e Chave Anônima do Supabase.', 'var(--color-warning)');
+      return;
+    }
+    setIsTestingBackup(true);
+    setBackupTestResult(null);
+    try {
+      const result = await testSupabaseConnection(backupConfig);
+      setBackupTestResult(result);
+      if (result.success) {
+        addToast(`Conexão OK! Latência: ${result.ms}ms`, 'var(--color-success)');
+      } else {
+        addToast(result.message, 'var(--color-danger)');
+      }
+    } catch (err: any) {
+      setBackupTestResult({ success: false, message: err?.message || 'Erro de conexão' });
+      addToast('Falha no teste de conexão.', 'var(--color-danger)');
+    } finally {
+      setIsTestingBackup(false);
+    }
+  };
+
+  const handleRestoreFromCloud = async () => {
+    if (!confirm('Deseja restaurar os registros do dia da nuvem Supabase para este dispositivo? Seus dados locais serão preservados e integrados.')) {
+      return;
+    }
+    setIsRestoring(true);
+    setRestoreResult(null);
+    try {
+      const res = await restoreLatestSnapshotFromSupabase(backupConfig);
+      setRestoreResult({ success: res.success, message: res.message });
+      if (res.success) {
+        addToast(res.message, 'var(--color-success)');
+        await loadCloudBackups();
+      } else {
+        addToast(res.message, 'var(--color-danger)');
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Erro ao restaurar do Supabase';
+      setRestoreResult({ success: false, message: msg });
+      addToast(msg, 'var(--color-danger)');
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
 
   const handleTestConnection = async () => {
     if (!config.url || !config.anonKey) {
@@ -253,11 +314,11 @@ export default function SupabaseConfigModule() {
               <div className="flex items-center gap-2 text-emerald-400">
                 <ShieldCheck size={20} />
                 <h2 className="text-sm font-black text-white uppercase tracking-wider">
-                  Backup Cloud Automatizado no Supabase
+                  Armazenamento Persistente &amp; Multi-Dispositivo Supabase
                 </h2>
               </div>
               <p className="text-xs text-slate-400">
-                Salva snapshots integrais da base local IndexedDB (horas, logs de repro, auditorias e estados) diretamente no banco relacional em nuvem Supabase, complementando o Google Sheets.
+                Salva snapshots integrais da base local IndexedDB (horas, logs de repro, auditorias e estados) diretamente no banco em nuvem Supabase, permitindo alternar de aparelho ou PDT sem perder nenhum registro.
               </p>
             </div>
 
@@ -272,6 +333,20 @@ export default function SupabaseConfigModule() {
               </button>
             </div>
           </div>
+
+          {/* Banner Multi-Dispositivo */}
+          <div className="p-3.5 rounded-xl bg-gradient-to-r from-indigo-950/60 via-slate-900 to-purple-950/60 border border-indigo-500/30 flex items-start gap-3 text-xs">
+            <HardDrive size={20} className="text-indigo-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <span className="font-bold text-white uppercase tracking-wider block">
+                Segurança Contra Perda de Dados em Outros Celulares ou PDTs
+              </span>
+              <p className="text-slate-300 text-[11px] leading-relaxed">
+                Se você trocar de aparelho durante o turno, acesse este painel e clique em <strong>"Restaurar Dados da Nuvem para este Dispositivo"</strong>. O sistema mesclará todos os apontamentos da equipe ou do seu turno anterior sem sobrescrever o que já estiver lançado localmente.
+              </p>
+            </div>
+          </div>
+
 
           {/* Modal / Bloco de Script SQL */}
           {showSqlModal && (
@@ -415,6 +490,30 @@ export default function SupabaseConfigModule() {
             </div>
           )}
 
+          {/* Feedback Teste de Conexão */}
+          {backupTestResult && (
+            <div className={`p-3 rounded-xl border text-xs font-bold flex items-center gap-2 ${
+              backupTestResult.success 
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' 
+                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+            }`}>
+              {backupTestResult.success ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+              <span>{backupTestResult.message} {backupTestResult.ms ? `(${backupTestResult.ms}ms)` : ''}</span>
+            </div>
+          )}
+
+          {/* Feedback Restauração Multi-Dispositivo */}
+          {restoreResult && (
+            <div className={`p-3 rounded-xl border text-xs font-bold flex items-center gap-2 ${
+              restoreResult.success 
+                ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300' 
+                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+            }`}>
+              {restoreResult.success ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+              <span>{restoreResult.message}</span>
+            </div>
+          )}
+
           {/* Botões de Ação */}
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-white/10">
             <div className="flex flex-wrap gap-2">
@@ -426,6 +525,27 @@ export default function SupabaseConfigModule() {
               >
                 <CloudUpload size={14} className={isBackingUp ? 'animate-bounce' : ''} />
                 <span>{isBackingUp ? 'Enviando Snapshot...' : 'Salvar Snapshot no Supabase Agora'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleRestoreFromCloud}
+                disabled={isRestoring || isBackingUp}
+                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-black uppercase rounded-xl flex items-center gap-2 cursor-pointer transition-all shadow-lg shadow-indigo-600/20"
+                title="Restaura os logs de outros celulares/PDTs para este aparelho"
+              >
+                <RefreshCw size={14} className={isRestoring ? 'animate-spin' : ''} />
+                <span>{isRestoring ? 'Restaurando da Nuvem...' : 'Restaurar Dados da Nuvem para este Dispositivo'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleTestBackupConnection}
+                disabled={isTestingBackup}
+                className="px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/15 rounded-xl text-xs font-bold uppercase flex items-center gap-2 cursor-pointer transition-all"
+              >
+                <TestTube2 size={13} className={isTestingBackup ? 'animate-spin' : ''} />
+                <span>{isTestingBackup ? 'Testando...' : 'Testar Conexão'}</span>
               </button>
 
               <button
@@ -447,6 +567,7 @@ export default function SupabaseConfigModule() {
               <span>Salvar Parâmetros</span>
             </button>
           </div>
+
 
           {/* Lista de Snapshots Recentes no Supabase */}
           {cloudBackupsList.length > 0 && (

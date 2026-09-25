@@ -33,29 +33,35 @@ import {
   Building2,
   BarChart3,
   HelpCircle,
-  Clock
+  Clock,
+  GitCommit,
+  Database,
+  Flame
 } from 'lucide-react';
+import StreetHeatmapAnalytics from './StreetHeatmapAnalytics';
 import {
   ArticleAddressRecord,
   ArticleAddressStats,
-  loadArticleAddressRecords,
   saveArticleAddressRecord,
   saveBulkArticleAddressRecords,
   deleteArticleAddressRecord,
-  clearAllArticleAddressRecords,
   computeArticleAddressStats,
   parseStreetAndSectorFromAddress,
+  auditArticleAddressRecord,
   parsePastedSpreadsheetText,
   exportRecordsToExcel,
-  exportRecordsToCsv,
-  auditArticleAddressRecord
+  exportRecordsToCsv
 } from '../services/articleAddressService';
+import { fetchGoogleSheetData } from '../services/googleSheetsService';
 import { FiveSVisualReminder } from './FiveSVisualReminder';
 import { AddressMapVisualizer } from './AddressMapVisualizer';
 import { SequentialFlowAnalysis } from './SequentialFlowAnalysis';
 import { SpreadsheetPlanAuditValidator } from './SpreadsheetPlanAuditValidator';
+import { DigitalTwinSpatialMap } from './DigitalTwinSpatialMap';
+import { StreetTopologyDensityMatrix } from './StreetTopologyDensityMatrix';
+import { CtnAuditLogIndexedDbView } from './CtnAuditLogIndexedDbView';
 import { Log } from '../types';
-import { GitCommit } from 'lucide-react';
+import { useArticleAudit } from '../hooks/useArticleAudit';
 
 interface ArticleAddressAuditModuleProps {
   logs?: Log[];
@@ -68,15 +74,13 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
   onNotify,
   onNavigateToStreet
 }) => {
-  // 1. Estado dos Registros
-  const [records, setRecords] = useState<ArticleAddressRecord[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const { records, setRecords, loading, refreshRecords } = useArticleAudit();
 
   // 2. Filtros Globais
   const [selectedDateFilter, setSelectedDateFilter] = useState<string>('TODOS');
   const [selectedSectorFilter, setSelectedSectorFilter] = useState<string>('TODOS');
   const [searchTerm, setSearchTerm] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<'VALIDADOR_PLANILHA' | 'DASHBOARD' | 'MAPEAMENTO_ENDERECOS' | 'FLUXO_SEQUENCIAL' | 'EXPLORADOR_RUAS' | 'AUDITORIA' | 'LEMBRETE_5S' | 'TABELA_REGISTROS'>('VALIDADOR_PLANILHA');
+  const [activeTab, setActiveTab] = useState<'VALIDADOR_PLANILHA' | 'DASHBOARD' | 'MAPA_3D_ESPACIAL' | 'MAPEAMENTO_ENDERECOS' | 'FLUXO_SEQUENCIAL' | 'EXPLORADOR_RUAS' | 'AUDITORIA' | 'LEMBRETE_5S' | 'TABELA_REGISTROS' | 'HEATMAP_HISTORICO'>('VALIDADOR_PLANILHA');
 
   // 3. Estado do Formulário de Registro Manual
   const [showManualForm, setShowManualForm] = useState<boolean>(false);
@@ -87,38 +91,20 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
   const [formColaborador, setFormColaborador] = useState<string>('EMERSON GONÇALVES');
   const [formObs, setFormObs] = useState<string>('');
 
-  // 4. Estado da Importação de Planilha (Paste Excel/Sheets)
+  // 4. Estado da Importação de Planilha
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [pasteText, setPasteText] = useState<string>('');
   const [importPreviewCount, setImportPreviewCount] = useState<{ valid: number; errors: number } | null>(null);
 
-  // 5. Estado de Acordeão no Explorador de Ruas
+  // 5. Estado de Acordeão
   const [expandedStreets, setExpandedStreets] = useState<Record<string, boolean>>({});
-
-  // Carrega registros locais ao iniciar
-  const reloadData = async () => {
-    setLoading(true);
-    try {
-      const data = await loadArticleAddressRecords();
-      setRecords(data);
-    } catch (err) {
-      console.error('Erro ao carregar registros de artigos:', err);
-      if (onNotify) onNotify('Erro ao carregar dados locais', 'var(--color-danger)');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    reloadData();
-  }, []);
 
   // Recalcula estatísticas e agregações
   const stats: ArticleAddressStats = useMemo(() => {
     return computeArticleAddressStats(records, selectedDateFilter, selectedSectorFilter);
   }, [records, selectedDateFilter, selectedSectorFilter]);
 
-  // Lista de registros filtrada por busca textual
+  // Lista de registros filtrada
   const displayRecords = useMemo(() => {
     let list = records;
     if (selectedDateFilter !== 'TODOS') {
@@ -140,11 +126,6 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
     return list.sort((a, b) => b.criadoEm - a.criadoEm);
   }, [records, selectedDateFilter, selectedSectorFilter, searchTerm]);
 
-  // Prévia da rua e setor digitados no form manual
-  const formInferred = useMemo(() => {
-    return parseStreetAndSectorFromAddress(formEndereco);
-  }, [formEndereco]);
-
   // Salvar registro manual
   const handleSaveManual = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -161,7 +142,7 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
       data: formData,
       artigo: formArtigo.trim().toUpperCase(),
       endereco: formEndereco.trim().toUpperCase(),
-      ctn: ctnNum,
+      ctn: formCtn.trim() || '1',
       rua: rua.toUpperCase(),
       setor,
       hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
@@ -173,22 +154,21 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
       criadoEm: Date.now()
     };
 
-    // Aplica auditoria cruzada
     const audit = auditArticleAddressRecord(newRecord, records);
     newRecord.statusAuditoria = audit.status;
     newRecord.mensagensAuditoria = audit.mensagens;
 
     const ok = await saveArticleAddressRecord(newRecord);
     if (ok) {
-      setRecords(prev => [newRecord, ...prev]);
+      refreshRecords();
       setFormArtigo('');
       setFormEndereco('');
       setFormCtn('1');
       setFormObs('');
       setShowManualForm(false);
-      if (onNotify) onNotify(`Artigo ${newRecord.artigo} registrado no endereço ${newRecord.endereco}!`, 'var(--color-success)');
+      if (onNotify) onNotify(`Artigo ${newRecord.artigo} registrado!`, 'var(--color-success)');
     } else {
-      if (onNotify) onNotify('Erro ao salvar no banco local', 'var(--color-danger)');
+      if (onNotify) onNotify('Erro ao salvar', 'var(--color-danger)');
     }
   };
 
@@ -213,7 +193,7 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
 
     const ok = await saveBulkArticleAddressRecords(validRecords);
     if (ok) {
-      await reloadData();
+      await refreshRecords();
       setShowImportModal(false);
       setPasteText('');
       setImportPreviewCount(null);
@@ -234,8 +214,13 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
 
   // Exportações
   const handleExportExcel = () => {
-    exportRecordsToExcel(displayRecords, `Auditoria_Artigos_Ruas_${selectedDateFilter}_${selectedSectorFilter}.xlsx`);
-    if (onNotify) onNotify('Planilha Excel gerada com sucesso!', 'var(--color-success)');
+    try {
+      exportRecordsToExcel(displayRecords);
+      if (onNotify) onNotify('Arquivo Excel (.xlsx) exportado com sucesso!', 'var(--color-success)');
+    } catch (err) {
+      console.error('Erro ao exportar Excel:', err);
+      if (onNotify) onNotify('Falha ao gerar arquivo Excel.', 'var(--color-danger)');
+    }
   };
 
   const handleExportCsv = () => {
@@ -468,112 +453,39 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
       </div>
 
       {/* -------------------------------------------------------------
-          3. NAVEGAÇÃO ENTRE AS VISÕES DO MÓDULO (COM MAPEAMENTO & FLUXO)
+          3. NAVEGAÇÃO ENTRE AS VISÕES DO MÓDULO
           ------------------------------------------------------------- */}
-      <div className="flex flex-wrap border-b border-white/10 gap-1 sm:gap-2">
-        <button
-          type="button"
-          onClick={() => setActiveTab('VALIDADOR_PLANILHA')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono transition-all cursor-pointer ${
-            activeTab === 'VALIDADOR_PLANILHA'
-              ? 'bg-slate-800 text-emerald-400 border-t-2 border-emerald-400 border-x border-white/10 shadow-lg'
-              : 'text-emerald-400/90 hover:text-emerald-300 hover:bg-emerald-500/10'
-          }`}
-        >
-          <FileSpreadsheet size={15} className="text-emerald-400" />
-          <span>VALIDADOR PLANILHA vs REAL</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('DASHBOARD')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono transition-all cursor-pointer ${
-            activeTab === 'DASHBOARD'
-              ? 'bg-slate-800 text-cyan-400 border-t-2 border-cyan-400 border-x border-white/10'
-              : 'text-slate-400 hover:text-white hover:bg-white/5'
-          }`}
-        >
-          <BarChart3 size={15} />
-          <span>DASHBOARD</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('MAPEAMENTO_ENDERECOS')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono transition-all cursor-pointer ${
-            activeTab === 'MAPEAMENTO_ENDERECOS'
-              ? 'bg-slate-800 text-cyan-400 border-t-2 border-cyan-400 border-x border-white/10'
-              : 'text-slate-400 hover:text-white hover:bg-white/5'
-          }`}
-        >
-          <MapPin size={15} />
-          <span>MAPEAMENTO 2D</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('FLUXO_SEQUENCIAL')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono transition-all cursor-pointer ${
-            activeTab === 'FLUXO_SEQUENCIAL'
-              ? 'bg-slate-800 text-cyan-400 border-t-2 border-cyan-400 border-x border-white/10'
-              : 'text-slate-400 hover:text-white hover:bg-white/5'
-          }`}
-        >
-          <GitCommit size={15} />
-          <span>FLUXO SEQUENCIAL</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('EXPLORADOR_RUAS')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono transition-all cursor-pointer ${
-            activeTab === 'EXPLORADOR_RUAS'
-              ? 'bg-slate-800 text-cyan-400 border-t-2 border-cyan-400 border-x border-white/10'
-              : 'text-slate-400 hover:text-white hover:bg-white/5'
-          }`}
-        >
-          <Building2 size={15} />
-          <span>EXPLORADOR DE RUAS</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('AUDITORIA')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono transition-all cursor-pointer ${
-            activeTab === 'AUDITORIA'
-              ? 'bg-slate-800 text-cyan-400 border-t-2 border-cyan-400 border-x border-white/10'
-              : 'text-slate-400 hover:text-white hover:bg-white/5'
-          }`}
-        >
-          <ShieldCheck size={15} />
-          <span>AUDITORIA ({stats.auditoriaResumo.alertas + stats.auditoriaResumo.inconsistentes})</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('LEMBRETE_5S')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono transition-all cursor-pointer ${
-            activeTab === 'LEMBRETE_5S'
-              ? 'bg-slate-800 text-cyan-400 border-t-2 border-cyan-400 border-x border-white/10'
-              : 'text-slate-400 hover:text-white hover:bg-white/5'
-          }`}
-        >
-          <Sparkles size={15} />
-          <span>GUIA 5S DEGRADÊ</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('TABELA_REGISTROS')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono transition-all cursor-pointer ${
-            activeTab === 'TABELA_REGISTROS'
-              ? 'bg-slate-800 text-cyan-400 border-t-2 border-cyan-400 border-x border-white/10'
-              : 'text-slate-400 hover:text-white hover:bg-white/5'
-          }`}
-        >
-          <FileSpreadsheet size={15} />
-          <span>TODOS OS REGISTROS ({displayRecords.length})</span>
-        </button>
+      <div className="flex flex-wrap border-b border-white/10 gap-1 sm:gap-2 mb-4">
+        {[
+          { tab: 'VALIDADOR_PLANILHA', icon: FileSpreadsheet, label: 'VALIDAR' },
+          { tab: 'HEATMAP_HISTORICO', icon: Flame, label: 'HEATMAP & TEMPO' },
+          { tab: 'DASHBOARD', icon: BarChart3, label: 'DASHBOARD' },
+          { tab: 'MAPA_3D_ESPACIAL', icon: Layers, label: 'MAPA 2D / 3D' },
+          { tab: 'FLUXO_SEQUENCIAL', icon: GitCommit, label: 'FLUXO' },
+          { tab: 'EXPLORADOR_RUAS', icon: Building2, label: 'RUAS' },
+          { tab: 'TABELA_REGISTROS', icon: Database, label: 'REGISTROS' },
+          { tab: 'AUDITORIA', icon: ShieldCheck, label: 'AUDITORIA' },
+          { tab: 'LEMBRETE_5S', icon: Sparkles, label: '5S' },
+        ].map(item => (
+          <button
+            key={item.tab}
+            type="button"
+            onClick={() => setActiveTab(item.tab as any)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-t-lg text-[10px] font-bold font-mono transition-all cursor-pointer ${
+              activeTab === item.tab
+                ? 'bg-slate-800 text-cyan-400 border-t-2 border-cyan-400'
+                : 'text-slate-500 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <item.icon size={13} />
+            <span>{item.label}</span>
+            {item.tab === 'AUDITORIA' && (stats.auditoriaResumo.alertas + stats.auditoriaResumo.inconsistentes) > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 text-[9px]">
+                {stats.auditoriaResumo.alertas + stats.auditoriaResumo.inconsistentes}
+              </span>
+            )}
+          </button>
+        ))}
       </div>
 
       {/* -------------------------------------------------------------
@@ -584,13 +496,27 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
           <SpreadsheetPlanAuditValidator
             logs={logs || []}
             articleRecords={records}
-            onRefreshRecords={reloadData}
+            onRefreshRecords={refreshRecords}
             onAddRecords={async (newRecords) => {
               await saveBulkArticleAddressRecords(newRecords);
-              await reloadData();
+              await refreshRecords();
             }}
             onNotify={onNotify}
             onNavigateToStreet={onNavigateToStreet}
+          />
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------
+          TAB: MAPA DE CALOR, TEMPO GASTO E HISTÓRICO DAS RUAS
+          ------------------------------------------------------------- */}
+      {activeTab === 'HEATMAP_HISTORICO' && (
+        <div className="animate-in fade-in duration-200">
+          <StreetHeatmapAnalytics
+            logs={logs || []}
+            activeSectorId={selectedSectorFilter}
+            onAddToast={onNotify}
+            onSelectStreet={onNavigateToStreet}
           />
         </div>
       )}
@@ -735,14 +661,14 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
       )}
 
       {/* -------------------------------------------------------------
-          TAB: MAPEAMENTO VISUAL 2D DE ENDEREÇOS (CORREDOR / GRADE)
+          TAB: DIGITAL TWIN & PLANTA ESPACIAL (MAPA 2D / 3D)
           ------------------------------------------------------------- */}
-      {activeTab === 'MAPEAMENTO_ENDERECOS' && (
+      {activeTab === 'MAPA_3D_ESPACIAL' && (
         <div className="animate-in fade-in duration-200">
-          <AddressMapVisualizer
+          <DigitalTwinSpatialMap
             records={displayRecords}
-            selectedDate={selectedDateFilter}
             onNotify={onNotify}
+            onNavigateToStreet={onNavigateToStreet}
           />
         </div>
       )}
@@ -792,123 +718,19 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
       )}
 
       {/* -------------------------------------------------------------
-          TAB 2: EXPLORADOR DE RUAS (QUANTOS ENDEREÇOS POR RUA & QUAIS ARTIGOS)
+          TAB 2: CATÁLOGO E DENSIDADE DE RUAS // SETOR 87 (RUAS)
           ------------------------------------------------------------- */}
       {activeTab === 'EXPLORADOR_RUAS' && (
-        <div className="bg-slate-900/90 border border-white/10 rounded-2xl p-5 shadow-xl space-y-4 animate-in fade-in duration-200">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
-            <div>
-              <h2 className="text-base font-black text-white uppercase font-mono flex items-center gap-2">
-                <MapPin size={18} className="text-cyan-400" />
-                <span>EXPLORADOR: QUANTOS ENDEREÇOS POR RUA & QUAIS ARTIGOS</span>
-              </h2>
-              <p className="text-xs text-slate-400">
-                Visão detalhada por rua mostrando cada endereço cadastrado, respectivo artigo alocado e caixas (CTN)
-              </p>
-            </div>
-            <div className="text-xs text-slate-400 font-mono">
-              Total de Ruas: <strong className="text-white">{stats.enderecosPorRua.length}</strong>
-            </div>
-          </div>
-
-          {stats.enderecosPorRua.length === 0 ? (
-            <div className="text-center py-12 text-slate-500 text-xs">
-              Nenhuma rua catalogada no filtro selecionado.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {stats.enderecosPorRua.map(item => {
-                const isExpanded = !!expandedStreets[item.rua];
-                // Registros específicos dessa rua
-                const streetRecords = displayRecords.filter(r => r.rua.toUpperCase() === item.rua.toUpperCase());
-
-                return (
-                  <div key={item.rua} className="bg-slate-950/70 border border-white/10 rounded-xl overflow-hidden transition-all">
-                    {/* Header da Rua (Linha Principal) */}
-                    <div
-                      onClick={() => toggleStreetExpand(item.rua)}
-                      className="p-3.5 flex flex-wrap items-center justify-between gap-3 cursor-pointer hover:bg-white/5 transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <button type="button" className="text-slate-400 hover:text-white">
-                          {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                        </button>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-white font-mono font-black text-base">{item.rua}</span>
-                            <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-300 font-mono text-[10px]">
-                              Setor {item.setor}
-                            </span>
-                          </div>
-                          <div className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
-                            <span>{item.artigos.length} artigos diferentes nesta rua</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-4">
-                        <div className="text-right">
-                          <div className="text-sm font-black font-mono text-cyan-400">
-                            {item.totalEnderecos} endereços
-                          </div>
-                          <div className="text-[11px] text-slate-400 font-mono">
-                            {item.totalCtn} cx (CTN)
-                          </div>
-                        </div>
-                        <span className="text-xs text-cyan-400 hover:underline">
-                          {isExpanded ? 'Recolher' : 'Ver Detalhes'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Conteúdo Expandido: Lista de Endereços da Rua */}
-                    {isExpanded && (
-                      <div className="p-4 bg-slate-900/60 border-t border-white/10 space-y-2">
-                        <div className="text-xs font-mono text-slate-400 uppercase font-semibold mb-2">
-                          Endereços alocados na rua {item.rua}:
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                          {streetRecords.map(rec => (
-                            <div
-                              key={rec.id}
-                              className="bg-slate-950/80 border border-white/5 rounded-lg p-2.5 flex items-center justify-between"
-                            >
-                              <div className="space-y-0.5">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-emerald-400 font-mono font-bold text-xs">
-                                    {rec.endereco}
-                                  </span>
-                                  <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono ${
-                                    rec.statusAuditoria === 'VALIDADO'
-                                      ? 'bg-emerald-500/10 text-emerald-400'
-                                      : rec.statusAuditoria === 'ALERTA'
-                                      ? 'bg-amber-500/10 text-amber-400'
-                                      : 'bg-rose-500/10 text-rose-400'
-                                  }`}>
-                                    {rec.statusAuditoria}
-                                  </span>
-                                </div>
-                                <div className="text-xs font-mono text-white font-semibold">
-                                  Artigo: {rec.artigo}
-                                </div>
-                                <div className="text-[10px] text-slate-400 font-mono">
-                                  Data: {rec.data} • {rec.hora || '--:--'}
-                                </div>
-                              </div>
-                              <div className="text-right font-mono">
-                                <span className="text-sm font-black text-cyan-300">{rec.ctn}</span>
-                                <span className="text-[10px] text-slate-400 block">cx</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        <div className="animate-in fade-in duration-200">
+          <StreetTopologyDensityMatrix
+            records={displayRecords}
+            onNotify={onNotify}
+            onNavigateToStreet={onNavigateToStreet}
+            onViewIn3D={(st) => {
+              setActiveTab('MAPA_3D_ESPACIAL');
+              if (onNotify) onNotify(`Focando corredor ${st} no Digital Twin`, 'var(--color-info)');
+            }}
+          />
         </div>
       )}
 
@@ -929,7 +751,7 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
             </div>
             <button
               type="button"
-              onClick={reloadData}
+              onClick={refreshRecords}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-mono border border-white/10 transition-colors"
             >
               <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
@@ -1026,84 +848,14 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
       )}
 
       {/* -------------------------------------------------------------
-          TAB 4: TABELA COMPLETA DE REGISTROS
+          TAB 4: LOG DE REGISTROS CTN & SINCRONIZAÇÃO INDEXEDDB (REGISTROS)
           ------------------------------------------------------------- */}
       {activeTab === 'TABELA_REGISTROS' && (
-        <div className="bg-slate-900/90 border border-white/10 rounded-2xl p-5 shadow-xl space-y-4 animate-in fade-in duration-200">
-          <div className="flex items-center justify-between border-b border-white/10 pb-3">
-            <div>
-              <h2 className="text-base font-black text-white uppercase font-mono flex items-center gap-2">
-                <FileSpreadsheet size={18} className="text-cyan-400" />
-                <span>TABELA DE REGISTROS GERAIS</span>
-              </h2>
-              <p className="text-xs text-slate-400">
-                Visualização tabular com ordenação temporal e status de auditoria
-              </p>
-            </div>
-            <span className="text-xs font-mono text-slate-400">
-              Exibindo {displayRecords.length} registros
-            </span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-300 font-mono">
-              <thead className="bg-slate-950/80 text-slate-400 uppercase text-[10px] border-b border-white/10">
-                <tr>
-                  <th className="py-2.5 px-3">Data</th>
-                  <th className="py-2.5 px-3">Rua</th>
-                  <th className="py-2.5 px-3">Endereço</th>
-                  <th className="py-2.5 px-3">Artigo</th>
-                  <th className="py-2.5 px-3 text-right">CTN (cx)</th>
-                  <th className="py-2.5 px-3">Setor</th>
-                  <th className="py-2.5 px-3">Status</th>
-                  <th className="py-2.5 px-3">Origem</th>
-                  <th className="py-2.5 px-3 text-center">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {displayRecords.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="text-center py-8 text-slate-500">
-                      Nenhum registro encontrado para os filtros ativos.
-                    </td>
-                  </tr>
-                ) : (
-                  displayRecords.map((rec) => (
-                    <tr key={rec.id} className="hover:bg-white/5 transition-colors">
-                      <td className="py-2.5 px-3 whitespace-nowrap text-slate-400">{rec.data}</td>
-                      <td className="py-2.5 px-3 font-bold text-white">{rec.rua}</td>
-                      <td className="py-2.5 px-3 font-bold text-emerald-400">{rec.endereco}</td>
-                      <td className="py-2.5 px-3 font-bold text-cyan-300">{rec.artigo}</td>
-                      <td className="py-2.5 px-3 text-right font-black text-white">{rec.ctn}</td>
-                      <td className="py-2.5 px-3 text-slate-400">{rec.setor}</td>
-                      <td className="py-2.5 px-3">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          rec.statusAuditoria === 'VALIDADO'
-                            ? 'bg-emerald-500/10 text-emerald-400'
-                            : rec.statusAuditoria === 'ALERTA'
-                            ? 'bg-amber-500/10 text-amber-400'
-                            : 'bg-rose-500/10 text-rose-400'
-                        }`}>
-                          {rec.statusAuditoria}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-500 text-[10px]">{rec.origem}</td>
-                      <td className="py-2.5 px-3 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteRecord(rec.id)}
-                          className="p-1 hover:text-rose-400 text-slate-500 transition-colors"
-                          title="Excluir"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+        <div className="animate-in fade-in duration-200">
+          <CtnAuditLogIndexedDbView
+            records={displayRecords}
+            onNotify={onNotify}
+          />
         </div>
       )}
 
@@ -1171,13 +923,16 @@ export const ArticleAddressAuditModule: React.FC<ArticleAddressAuditModuleProps>
                   className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-emerald-400 font-mono font-bold uppercase focus:border-cyan-500 focus:outline-none"
                   placeholder="Ex: B4VD-02"
                 />
-                {formEndereco && (
-                  <div className="text-[10px] text-slate-400 font-mono mt-1 flex items-center gap-2">
-                    <span>Rua detectada: <strong className="text-white">{formInferred.rua}</strong></span>
-                    <span>•</span>
-                    <span>Setor: <strong className="text-purple-300">{formInferred.setor}</strong></span>
-                  </div>
-                )}
+                {formEndereco && (() => {
+                  const formInferred = parseStreetAndSectorFromAddress(formEndereco);
+                  return (
+                    <div className="text-[10px] text-slate-400 font-mono mt-1 flex items-center gap-2">
+                      <span>Rua detectada: <strong className="text-white">{formInferred.rua}</strong></span>
+                      <span>•</span>
+                      <span>Setor: <strong className="text-purple-300">{formInferred.setor}</strong></span>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Código ou Descrição do Artigo */}
@@ -1325,3 +1080,5 @@ ART-8105	B4VA-01	20	2026-09-14"
     </div>
   );
 };
+
+export default ArticleAddressAuditModule;

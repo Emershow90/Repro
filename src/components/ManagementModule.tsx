@@ -52,8 +52,10 @@ import {
   Trash2,
   X,
   Edit3,
-  RotateCw
+  RotateCw,
+  BellRing
 } from 'lucide-react';
+import VphAlertManagement from './VphAlertManagement';
 import { 
   formatDateToBR, 
   parseDateString, 
@@ -102,6 +104,8 @@ const STORAGE_DEMANDS_KEY = 'repro_demands_v5';
 const STORAGE_ACTIVE_SESSION_KEY = 'repro_active_session_organism_v5';
 const STORAGE_EVENTS_KEY = 'repro_operational_events_v5';
 
+export type StorageSyncMode = 'hybrid' | 'sheets' | 'supabase';
+
 export default function ManagementModule({
   logs,
   activeSectorId,
@@ -114,9 +118,36 @@ export default function ManagementModule({
   networkStatus = 'online'
 }: ManagementModuleProps) {
   // -------------------------------------------------------------
-  // NAVEGAÇÃO ORIENTADA PRINCIPAL (4 PILARES)
+  // NAVEGAÇÃO ORIENTADA PRINCIPAL (6 PILARES COM SINCRONIZAÇÃO DEDICADA)
   // -------------------------------------------------------------
-  const [activeTab, setActiveTab] = useState<'sheets' | 'demandas' | 'fila' | 'ferramentas'>('sheets');
+  const [activeTab, setActiveTab] = useState<'sheets' | 'supabase' | 'demandas' | 'fila' | 'ferramentas' | 'alertas'>('sheets');
+
+  // Modo de armazenamento preferencial (Persistido no localStorage)
+  const [storageMode, setStorageMode] = useState<StorageSyncMode>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('repro_storage_mode') as StorageSyncMode;
+      if (saved === 'sheets' || saved === 'supabase' || saved === 'hybrid') {
+        return saved;
+      }
+    }
+    return 'hybrid';
+  });
+
+  const handleSelectStorageMode = (mode: StorageSyncMode) => {
+    setStorageMode(mode);
+    try {
+      localStorage.setItem('repro_storage_mode', mode);
+    } catch (e) {
+      console.warn('Falha ao salvar modo de armazenamento:', e);
+    }
+    if (mode === 'sheets') {
+      onAddToast('Modo de armazenamento: Planilha Google Sheets ativo!', 'var(--color-success)');
+    } else if (mode === 'supabase') {
+      onAddToast('Modo de armazenamento: Supabase Cloud (PostgreSQL) ativo!', 'var(--color-success)');
+    } else {
+      onAddToast('Modo de armazenamento Híbrido ativo: Google Sheets + Supabase Cloud!', 'var(--color-info)');
+    }
+  };
 
   // Filtros de Data e Setor para o Balanço
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -607,13 +638,165 @@ function doPost(e) {
     setTimeout(() => setCopiedScript(false), 3000);
   };
 
+  // Seletor de Modo de Armazenamento e Alternador Rápido entre Provedores
+  const renderSyncModeSwitcher = () => (
+    <div className="repro-card p-4 sm:p-5 rounded-2xl space-y-3 font-mono">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="space-y-0.5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-white uppercase flex items-center gap-1.5">
+              <Layers size={15} className="text-cyan-400" />
+              Estratégia de Armazenamento &amp; Sincronização
+            </span>
+            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border uppercase ${
+              storageMode === 'hybrid'
+                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                : storageMode === 'sheets'
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                : 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+            }`}>
+              {storageMode === 'hybrid' ? 'Modo Híbrido (Dual)' : storageMode === 'sheets' ? 'Planilha Sheets' : 'Supabase Cloud'}
+            </span>
+          </div>
+          <p className="text-[0.65rem] text-slate-400">
+            Alterne entre as abas de configuração ou defina o destino preferencial da operação.
+          </p>
+        </div>
+
+        {/* Abas Rápidas de Alternância: Google Sheets vs Supabase */}
+        <div className="flex items-center p-1 bg-slate-900 rounded-xl border border-white/10 shrink-0">
+          <button
+            type="button"
+            onClick={() => setActiveTab('sheets')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-black uppercase flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'sheets'
+                ? 'bg-emerald-500 text-black shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <FileSpreadsheet size={14} />
+            <span>Google Sheets</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('supabase')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-black uppercase flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'supabase'
+                ? 'bg-purple-500 text-white shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Database size={14} />
+            <span>Supabase Cloud</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Cards de Seleção dos 3 Modos de Operação */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1">
+        {/* Modo Híbrido */}
+        <button
+          type="button"
+          onClick={() => handleSelectStorageMode('hybrid')}
+          className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+            storageMode === 'hybrid'
+              ? 'bg-cyan-500/15 border-cyan-500/60 shadow-md ring-1 ring-cyan-500/30'
+              : 'bg-slate-900/60 border-white/10 hover:border-white/25'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-300">
+                <Layers size={14} />
+              </div>
+              <span className="text-xs font-black text-white uppercase">Modo Híbrido (Dual-Sync)</span>
+            </div>
+            <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+              Recomendado
+            </span>
+          </div>
+          <p className="text-[0.62rem] text-slate-400 leading-snug">
+            Transmite logs para a Planilha Google E mantém snapshots no banco relacional Supabase.
+          </p>
+          <div className="flex items-center justify-between text-[0.6rem] text-cyan-300 font-bold border-t border-white/5 pt-1.5">
+            <span>Máxima segurança operacional</span>
+            {storageMode === 'hybrid' && <CheckCircle2 size={12} className="text-cyan-400" />}
+          </div>
+        </button>
+
+        {/* Modo Google Sheets */}
+        <button
+          type="button"
+          onClick={() => handleSelectStorageMode('sheets')}
+          className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+            storageMode === 'sheets'
+              ? 'bg-emerald-500/15 border-emerald-500/60 shadow-md ring-1 ring-emerald-500/30'
+              : 'bg-slate-900/60 border-white/10 hover:border-white/25'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-300">
+                <FileSpreadsheet size={14} />
+              </div>
+              <span className="text-xs font-black text-white uppercase">Planilha Google Sheets</span>
+            </div>
+            <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${
+              apiUrl ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+            }`}>
+              {apiUrl ? 'Conectado' : 'Sem URL'}
+            </span>
+          </div>
+          <p className="text-[0.62rem] text-slate-400 leading-snug">
+            Canal direto via Apps Script para consolidação e relatórios executivos na aba "Controle de horas - Repro".
+          </p>
+          <div className="flex items-center justify-between text-[0.6rem] text-emerald-300 font-bold border-t border-white/5 pt-1.5">
+            <span>{unsyncedLogs.length} pendentes na fila</span>
+            {storageMode === 'sheets' && <CheckCircle2 size={12} className="text-emerald-400" />}
+          </div>
+        </button>
+
+        {/* Modo Supabase Cloud */}
+        <button
+          type="button"
+          onClick={() => handleSelectStorageMode('supabase')}
+          className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+            storageMode === 'supabase'
+              ? 'bg-purple-500/15 border-purple-500/60 shadow-md ring-1 ring-purple-500/30'
+              : 'bg-slate-900/60 border-white/10 hover:border-white/25'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-purple-500/20 text-purple-300">
+                <Database size={14} />
+              </div>
+              <span className="text-xs font-black text-white uppercase">Supabase Cloud DB</span>
+            </div>
+            <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+              PostgreSQL
+            </span>
+          </div>
+          <p className="text-[0.62rem] text-slate-400 leading-snug">
+            Banco relacional ACID de alta disponibilidade, snapshots compactados e restauração de dados entre coletores.
+          </p>
+          <div className="flex items-center justify-between text-[0.6rem] text-purple-300 font-bold border-t border-white/5 pt-1.5">
+            <span>Backups e Restauração Instantânea</span>
+            {storageMode === 'supabase' && <CheckCircle2 size={12} className="text-purple-400" />}
+          </div>
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="w-full space-y-5 font-mono text-slate-200">
       
       {/* ========================================================= */}
       {/* 1. ORGANOGRAMA & DIAGRAMA DE FLUXO ORIENTADO (TOPO VISUAL) */}
       {/* ========================================================= */}
-      <section className="p-4 rounded-2xl bg-slate-950/90 border border-white/15 shadow-2xl backdrop-blur-xl space-y-4">
+      <section className="repro-card-elevated p-4 sm:p-5 rounded-2xl shadow-2xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-xl bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
@@ -622,7 +805,7 @@ function doPost(e) {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-sm font-black text-white uppercase tracking-wider">
-                  Hub de Gestão &amp; Integração Google Sheets
+                  Hub de Gestão, Sincronização &amp; Armazenamento Nuvem
                 </h1>
                 <span className="text-[0.6rem] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
                   TORRE 5.0
@@ -727,9 +910,10 @@ function doPost(e) {
       </section>
 
       {/* ========================================================= */}
-      {/* 2. MENU DE NAVEGAÇÃO MINIMALISTA (4 ABAS OBJETIVAS) */}
+      {/* 2. MENU DE NAVEGAÇÃO MINIMALISTA (5 ABAS OBJETIVAS) */}
       {/* ========================================================= */}
       <nav className="flex items-center gap-2 overflow-x-auto scrollbar-thin border-b border-white/10 pb-3">
+        {/* 1. Google Sheets */}
         <button
           type="button"
           onClick={() => setActiveTab('sheets')}
@@ -740,9 +924,34 @@ function doPost(e) {
           }`}
         >
           <FileSpreadsheet size={15} />
-          <span>1. Conexão &amp; Sincronia Google Sheets</span>
+          <span>1. Google Sheets</span>
+          <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+            activeTab === 'sheets' ? 'bg-black/20 text-black' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+          }`}>
+            Planilha
+          </span>
         </button>
 
+        {/* 2. Supabase Cloud */}
+        <button
+          type="button"
+          onClick={() => setActiveTab('supabase')}
+          className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'supabase'
+              ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/20 scale-[1.01]'
+              : 'bg-slate-950 border border-white/10 text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <Database size={15} />
+          <span>2. Supabase Cloud</span>
+          <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+            activeTab === 'supabase' ? 'bg-black/20 text-white' : 'bg-purple-500/10 text-purple-400 border border-purple-500/30'
+          }`}>
+            PostgreSQL
+          </span>
+        </button>
+
+        {/* 3. Balanço de Demandas */}
         <button
           type="button"
           onClick={() => setActiveTab('demandas')}
@@ -753,9 +962,10 @@ function doPost(e) {
           }`}
         >
           <Activity size={15} />
-          <span>2. Balanço de Demandas por Rua ({filteredStreets.length})</span>
+          <span>3. Demandas por Rua ({filteredStreets.length})</span>
         </button>
 
+        {/* 4. Fila de Transmissão */}
         <button
           type="button"
           onClick={() => setActiveTab('fila')}
@@ -766,9 +976,10 @@ function doPost(e) {
           }`}
         >
           <RotateCw size={15} />
-          <span>3. Fila de Transmissão ({unsyncedLogs.length} pendentes)</span>
+          <span>4. Fila de Transmissão ({unsyncedLogs.length})</span>
         </button>
 
+        {/* 5. Modo TV & Ferramentas */}
         <button
           type="button"
           onClick={() => setActiveTab('ferramentas')}
@@ -779,7 +990,26 @@ function doPost(e) {
           }`}
         >
           <Settings size={15} />
-          <span>4. Backup Nuvem, Supabase &amp; Modo TV</span>
+          <span>5. Modo TV &amp; Dispositivos</span>
+        </button>
+
+        {/* 6. Metas & Alertas VPH */}
+        <button
+          type="button"
+          onClick={() => setActiveTab('alertas')}
+          className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'alertas'
+              ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20 scale-[1.01]'
+              : 'bg-slate-950 border border-white/10 text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <BellRing size={15} />
+          <span>6. Alertas &amp; Metas VPH</span>
+          <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+            activeTab === 'alertas' ? 'bg-black/20 text-black' : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+          }`}>
+            Produtividade
+          </span>
         </button>
       </nav>
 
@@ -788,6 +1018,7 @@ function doPost(e) {
       {/* ========================================================= */}
       {activeTab === 'sheets' && (
         <div className="space-y-4 animate-fade-in">
+          {renderSyncModeSwitcher()}
           
           {/* Card Central de Operação da Planilha */}
           <div className="p-5 rounded-2xl bg-slate-950 border border-emerald-500/30 shadow-xl space-y-4">
@@ -987,6 +1218,129 @@ function doPost(e) {
                 </pre>
               </div>
             )}
+          </div>
+
+          {/* Banner de Alternância Rápida para o Supabase */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-950/40 via-slate-950 to-slate-950 border border-purple-500/30 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                <Database size={18} />
+              </div>
+              <div>
+                <h4 className="text-xs font-black text-white uppercase flex items-center gap-2">
+                  <span>Deseja gerenciar o Banco Relacional ou Snapshots na Nuvem?</span>
+                  <span className="text-[9px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                    PostgreSQL
+                  </span>
+                </h4>
+                <p className="text-[0.65rem] text-slate-400">
+                  O Supabase Cloud garante redundância integral dos dados do IndexedDB com backups e restauração rápida.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('supabase')}
+              className="px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-white text-xs font-black uppercase flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-purple-500/20"
+            >
+              <span>Abrir Supabase Cloud</span>
+              <ArrowRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* ABA 2: SUPABASE CLOUD (BANCO RELACIONAL & SNAPSHOTS) */}
+      {/* ========================================================= */}
+      {activeTab === 'supabase' && (
+        <div className="space-y-4 animate-fade-in">
+          {renderSyncModeSwitcher()}
+
+          {/* Hero explicativo da arquitetura Supabase */}
+          <div className="p-5 rounded-2xl bg-slate-950 border border-purple-500/30 shadow-xl space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  <Database size={20} />
+                </div>
+                <div>
+                  <h2 className="text-sm font-black text-white uppercase flex items-center gap-2">
+                    <span>Supabase Cloud - Snapshots &amp; Banco Relacional</span>
+                    <span className="text-[9px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                      PostgreSQL
+                    </span>
+                  </h2>
+                  <p className="text-[0.68rem] text-slate-400 mt-0.5">
+                    Armazenamento relacional de missão crítica: contingência, snapshots do IndexedDB e recuperação rápida entre dispositivos.
+                  </p>
+                </div>
+              </div>
+
+              {/* Botão de Alternância Rápida para o Google Sheets */}
+              <button
+                type="button"
+                onClick={() => setActiveTab('sheets')}
+                className="px-3.5 py-2 rounded-xl bg-slate-900 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10 text-xs font-black uppercase flex items-center gap-2 cursor-pointer transition-all"
+              >
+                <FileSpreadsheet size={14} />
+                <span>Ver Planilha Google Sheets</span>
+              </button>
+            </div>
+
+            {/* Comparativo de Papéis dos Armazenamentos */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs pt-1">
+              <div className="p-3.5 rounded-xl bg-purple-950/30 border border-purple-500/20 space-y-1.5">
+                <div className="flex items-center gap-1.5 text-purple-300 font-black text-[0.68rem] uppercase">
+                  <Database size={13} />
+                  <span>Papel do Supabase Cloud</span>
+                </div>
+                <p className="text-[0.62rem] text-slate-300 leading-relaxed">
+                  Garante a integridade do banco de dados (tabelas de eventos e snapshots integrais). Permite que qualquer terminal ou coletor restaure o estado completo da operação em caso de perda ou troca de aparelho.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-500/20 space-y-1.5">
+                <div className="flex items-center gap-1.5 text-emerald-300 font-black text-[0.68rem] uppercase">
+                  <FileSpreadsheet size={13} />
+                  <span>Papel do Google Sheets</span>
+                </div>
+                <p className="text-[0.62rem] text-slate-300 leading-relaxed">
+                  Serve como o livro de registro executivo ("Controle de horas - Repro"), permitindo que supervisores e gerentes analisem tempos, VPH e distribuição de ruas sem precisar de queries no banco SQL.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Componente Modular Completo do Supabase */}
+          <SupabaseConfigModule />
+
+          {/* Banner de Alternância Rápida de Volta para a Planilha */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-950 to-slate-950 border border-emerald-500/30 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                <FileSpreadsheet size={18} />
+              </div>
+              <div>
+                <h4 className="text-xs font-black text-white uppercase flex items-center gap-2">
+                  <span>Deseja gerenciar o Webhook e as colunas do Google Sheets?</span>
+                  <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    Apps Script
+                  </span>
+                </h4>
+                <p className="text-[0.65rem] text-slate-400">
+                  Acesse o endpoint Apps Script, teste o ping e descarregue a fila de transmissão para a planilha.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('sheets')}
+              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black uppercase flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-emerald-500/20"
+            >
+              <span>Ir para Google Sheets</span>
+              <ArrowRight size={14} />
+            </button>
           </div>
         </div>
       )}
@@ -1340,22 +1694,53 @@ function doPost(e) {
       )}
 
       {/* ========================================================= */}
-      {/* ABA 4: FERRAMENTAS AVANÇADAS, SUPABASE & MODO TV */}
+      {/* ABA 5: MODO TV, DISPOSITIVOS & DIAGNÓSTICO */}
       {/* ========================================================= */}
       {activeTab === 'ferramentas' && (
         <div className="space-y-5 animate-fade-in">
           
-          {/* 1. Módulo Supabase Cloud Snapshots */}
-          <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-sm space-y-3">
-            <h2 className="text-xs font-black text-white uppercase flex items-center gap-2">
-              <Database size={16} className="text-purple-400" />
-              <span>Supabase Cloud - Snapshots Automáticos &amp; Banco Relacional</span>
-            </h2>
-            <p className="text-[0.68rem] text-slate-400">
-              Redundância profissional de dados: salve cópias integrais do banco IndexedDB na nuvem com restauração rápida.
-            </p>
-            <div className="pt-2">
-              <SupabaseConfigModule />
+          {/* Card de Atalho para as Centrais de Sincronização */}
+          <div className="p-4 rounded-2xl bg-slate-950 border border-white/15 shadow-sm flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+                <Layers size={18} />
+              </div>
+              <div>
+                <h3 className="text-xs font-black text-white uppercase flex items-center gap-2">
+                  <span>Centrais de Sincronização &amp; Armazenamento</span>
+                  <span className={`text-[9px] px-2 py-0.5 rounded uppercase font-bold border ${
+                    storageMode === 'hybrid'
+                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+                      : storageMode === 'sheets'
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                      : 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                  }`}>
+                    {storageMode === 'hybrid' ? 'Híbrido' : storageMode === 'sheets' ? 'Sheets' : 'Supabase'}
+                  </span>
+                </h3>
+                <p className="text-[0.65rem] text-slate-400">
+                  Gerencie as integrações de nuvem nas abas dedicadas do painel de gestão.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab('sheets')}
+                className="px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold uppercase flex items-center gap-1.5 cursor-pointer transition-all"
+              >
+                <FileSpreadsheet size={13} />
+                <span>Google Sheets</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('supabase')}
+                className="px-3 py-1.5 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-bold uppercase flex items-center gap-1.5 cursor-pointer transition-all"
+              >
+                <Database size={13} />
+                <span>Supabase Cloud</span>
+              </button>
             </div>
           </div>
 
@@ -1455,6 +1840,20 @@ function doPost(e) {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* ABA 6: METAS & ALERTAS DE PRODUTIVIDADE (VPH) */}
+      {/* ========================================================= */}
+      {activeTab === 'alertas' && (
+        <div className="space-y-4 animate-fade-in">
+          <VphAlertManagement
+            logs={logs}
+            selectedDate={selectedDate}
+            activeSectorId={activeSectorId}
+            onAddToast={onAddToast}
+          />
         </div>
       )}
 

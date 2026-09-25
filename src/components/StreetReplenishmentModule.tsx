@@ -34,10 +34,13 @@ import {
   Zap,
   BellRing,
   ScanLine,
-  ShieldCheck
+  ShieldCheck,
+  Lock
 } from 'lucide-react';
 import ReproCalculatorModal from './ReproCalculatorModal';
 import OfflineReplenishmentAssistant from './OfflineReplenishmentAssistant';
+import GeneralShiftClosureModal from './GeneralShiftClosureModal';
+import { isShiftLocked } from '../services/shiftClosureService';
 import { FiveSVisualReminder } from './FiveSVisualReminder';
 import { sendTelemetryHeartbeat } from '../services/telemetryService';
 import { 
@@ -45,7 +48,7 @@ import {
   formatDateToBR, 
   parseDateString, 
   getDayOfWeekName, 
-  getWeekNumber,
+  getWeekNumber, 
   formatTimeToHHMM 
 } from '../utils/dateUtils';
 import { 
@@ -66,6 +69,7 @@ interface StreetReplenishmentModuleProps {
   activeSectorId: string;
   onSaveLog: (log: Log) => Promise<void>;
   onAddToast: (msg: string, color?: string) => void;
+  onTriggerSync?: () => Promise<void>;
 }
 
 const STORAGE_ACTIVE_SESSION_KEY = 'repro_active_session_organism_v5';
@@ -89,7 +93,8 @@ export default function StreetReplenishmentModule({
   activeOperator,
   activeSectorId,
   onSaveLog,
-  onAddToast
+  onAddToast,
+  onTriggerSync
 }: StreetReplenishmentModuleProps) {
   // Modo PDT Zebra (800x480)
   const [pdtMode, setPdtMode] = useState<boolean>(() => {
@@ -107,6 +112,9 @@ export default function StreetReplenishmentModule({
     if (['87', '88', '89', '90'].includes(activeSectorId)) return activeSectorId;
     return '87';
   });
+
+  // Modal de Encerramento Geral do Turno Consciente
+  const [showShiftClosureModal, setShowShiftClosureModal] = useState(false);
 
   // Rua e Unidade do Realizado
   const [selectedStreet, setSelectedStreet] = useState<string>('B4VD');
@@ -150,6 +158,10 @@ export default function StreetReplenishmentModule({
     const d = String(today.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   });
+
+  const currentOperationDateBR = useMemo(() => {
+    return formatDateToBR(parseDateString(operationDate) || new Date());
+  }, [operationDate]);
 
   // Descanso de tela (Screensaver Global & Local)
   const { 
@@ -436,6 +448,65 @@ export default function StreetReplenishmentModule({
     })();
   }, []);
 
+  // Consolidado do Dia de Reabastecimento (Tempo Total, Endereços Totais e Ruas do Turno)
+  const { totalTempoGeralHojeSecs, totalEnderecosGeralHoje, totalVolumesGeralHoje, historicoHojeConsolidado } = useMemo(() => {
+    const formattedTargetDate = formatDateToBR(parseDateString(operationDate) || new Date());
+    
+    let histSecs = 0;
+    let histEnd = 0;
+    let histVol = 0;
+    const histItemsMap = new Map<string, { rua: string; setor: string; volumes: number; enderecos: number; tempoSegundos: number; horario: string }>();
+
+    logs.forEach(l => {
+      const act = (l.atividade || '').toUpperCase();
+      if (l.data === formattedTargetDate && act.includes('REABASTECIMENTO')) {
+        const ruaLog = (l.rua || act.replace(/REABASTECIMENTO\s*-\s*/i, '')).trim().toUpperCase();
+        const sec = Math.round(toSafeNumber(l.horas) * 3600);
+        const vol = Math.round(toSafeNumber(l.volumes));
+        const end = Math.round(toSafeNumber((l as any).enderecos || Math.max(1, Math.round(vol / 2.3))));
+
+        histSecs += sec;
+        histEnd += end;
+        histVol += vol;
+
+        const existing = histItemsMap.get(ruaLog);
+        if (existing) {
+          existing.volumes += vol;
+          existing.enderecos += end;
+          existing.tempoSegundos += sec;
+        } else {
+          histItemsMap.set(ruaLog, {
+            rua: ruaLog,
+            setor: inferSectorFromStreet(ruaLog),
+            volumes: vol,
+            enderecos: end,
+            tempoSegundos: sec,
+            horario: l.horaInicio || 'Hoje'
+          });
+        }
+      }
+    });
+
+    const historicoList = Array.from(histItemsMap.values()).map(item => ({
+      rua: item.rua,
+      setor: item.setor,
+      volumes: item.volumes,
+      enderecos: item.enderecos,
+      tempoSegundos: item.tempoSegundos,
+      tempoMinutos: Math.round(item.tempoSegundos / 60),
+      horario: item.horario,
+      vph: item.tempoSegundos > 0 ? ((item.volumes / item.tempoSegundos) * 3600).toFixed(1) : '45.0',
+      eph: item.tempoSegundos > 0 ? ((item.enderecos / item.tempoSegundos) * 3600).toFixed(1) : '20.0'
+    }));
+
+    return {
+      totalTempoGeralHojeSecs: histSecs + stopwatchSeconds,
+      totalEnderecosGeralHoje: histEnd + addressCount,
+      totalVolumesGeralHoje: histVol + volumeCount,
+      historicoHojeConsolidado: historicoList
+    };
+  }, [logs, operationDate, stopwatchSeconds, addressCount, volumeCount]);
+
   // Função Mestre de Persistência Atômica a cada Evento (Salva ActiveSession + OperationalEvents)
   const persistState = useCallback(async (
     nextAddr: number,
@@ -510,6 +581,10 @@ export default function StreetReplenishmentModule({
         tempoSegundos: swSecs,
         vph: vphEstimate,
         eph: ephEstimate,
+        tempoTotalGeralSegundos: totalTempoGeralHojeSecs,
+        enderecosTotalGeral: totalEnderecosGeralHoje,
+        volumesTotalGeral: totalVolumesGeralHoje,
+        historicoHoje: historicoHojeConsolidado,
         ultimaAcao: events.length > 0
           ? `Bipe na rua ${stName} (+${events[events.length - 1].volumesDelta} vol)`
           : `Rua ${stName} em operação`,
@@ -518,7 +593,7 @@ export default function StreetReplenishmentModule({
     } catch (err) {
       console.error('Erro ao persistir ActiveSession no IndexedDB', err);
     }
-  }, [demandValue, demandUnit, historicalStreetVolumesToday, activeOperator]);
+  }, [demandValue, demandUnit, historicalStreetVolumesToday, activeOperator, totalTempoGeralHojeSecs, totalEnderecosGeralHoje, totalVolumesGeralHoje, historicoHojeConsolidado]);
 
   const clearSession = useCallback(async () => {
     try {
@@ -567,6 +642,10 @@ export default function StreetReplenishmentModule({
             tempoSegundos: secs,
             vph: vphEst,
             eph: ephEst,
+            tempoTotalGeralSegundos: totalTempoGeralHojeSecs,
+            enderecosTotalGeral: totalEnderecosGeralHoje,
+            volumesTotalGeral: totalVolumesGeralHoje,
+            historicoHoje: historicoHojeConsolidado,
             ultimaAcao: `Reapro operando na rua ${effectiveStreet}`,
             ultimoBipeTs: now
           }).catch(() => {});
@@ -1177,6 +1256,13 @@ export default function StreetReplenishmentModule({
       const safeEnds = toSafeNumber(addressCount);
       const safeHrs = toSafeNumber(calculatedHours);
 
+      // Verificação de travamento de turno
+      if (isShiftLocked(formattedDate)) {
+        onAddToast(`O turno do dia ${formattedDate} está FINALIZADO e com edições travadas. Reabra o turno no cabeçalho para registrar novos apontamentos.`, 'var(--color-warning)');
+        pdtAudio.playScanError();
+        return;
+      }
+
       const computedVph = safeHrs > 0 ? (safeVols / safeHrs).toFixed(1) : "0.0";
       const computedEph = safeHrs > 0 ? (safeEnds / safeHrs).toFixed(1) : "0.0";
       const computedMedia = safeEnds > 0 ? Number((safeVols / safeEnds).toFixed(1)) : 0;
@@ -1473,8 +1559,50 @@ export default function StreetReplenishmentModule({
           >
             {soundActive ? <Volume2 size={13} className="text-emerald-400" /> : <VolumeX size={13} className="text-slate-500" />}
           </button>
+
+          {/* Botão Finalizar Geral do Dia (Header) / Badge Turno Finalizado */}
+          {isShiftLocked(currentOperationDateBR) ? (
+            <button
+              type="button"
+              onClick={() => setShowShiftClosureModal(true)}
+              className="min-h-[34px] px-2.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 text-xs font-bold uppercase flex items-center gap-1.5 transition-all cursor-pointer shadow-sm animate-pulse"
+              title="Turno do dia finalizado e edições travadas. Clique para ver detalhes ou reabrir."
+            >
+              <Lock size={14} className="text-amber-400" />
+              <span className="hidden md:inline text-[0.65rem] font-black">Turno Finalizado</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowShiftClosureModal(true)}
+              className="min-h-[34px] px-2.5 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-500/40 text-indigo-200 hover:text-white text-xs font-bold uppercase flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+              title="Finalizar Geral REPRO - Encerramento Consciente do Turno do Dia"
+            >
+              <ShieldCheck size={14} className="text-indigo-400" />
+              <span className="hidden md:inline text-[0.65rem] font-black">Finalizar Geral</span>
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Aviso de Travamento se Turno Finalizado */}
+      {isShiftLocked(currentOperationDateBR) && (
+        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/40 text-amber-200 text-xs flex items-center justify-between gap-3 font-mono">
+          <div className="flex items-center gap-2">
+            <Lock size={16} className="text-amber-400 shrink-0" />
+            <span>
+              <strong>Turno Finalizado ({currentOperationDateBR}):</strong> Os apontamentos para este dia estão bloqueados contra edições acidentais.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowShiftClosureModal(true)}
+            className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-lg text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
+          >
+            Ver Resumo / Reabrir
+          </button>
+        </div>
+      )}
 
       {/* 2. PAINEL UNIFICADO DE DEMANDA, REALIZADO, TEMPO & RITMO (ZERO REPETIÇÃO) */}
       <div className="p-3 rounded-xl bg-slate-950 border border-emerald-500/30 shadow-md space-y-2">
@@ -1487,6 +1615,18 @@ export default function StreetReplenishmentModule({
           </div>
 
           <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => {
+                useUIStore.getState().handleTabChange('historico');
+              }}
+              className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[0.65rem] font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
+              title="Abrir Histórico de Ruas, Média de Tempo e Mapa de Calor"
+            >
+              <Flame size={11} className="text-amber-400" />
+              <span>Histórico & Heatmap</span>
+            </button>
+
             <button
               type="button"
               onClick={() => {
@@ -1906,6 +2046,36 @@ export default function StreetReplenishmentModule({
         </button>
       </div>
 
+      {/* 6. BOTÃO DE ENCERRAMENTO GERAL DO REPRO / TURNO CONSCIENTE */}
+      <div className="pt-2">
+        <button
+          type="button"
+          onClick={() => setShowShiftClosureModal(true)}
+          className="w-full min-h-[48px] py-2.5 px-3 sm:px-4 bg-gradient-to-r from-indigo-950 via-slate-900 to-purple-950 hover:from-indigo-900 hover:to-purple-900 border-2 border-indigo-500/40 hover:border-indigo-400 text-white rounded-xl text-xs sm:text-sm font-black uppercase flex items-center justify-between shadow-xl shadow-indigo-950/50 transition-all cursor-pointer group active:scale-[0.99]"
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="p-2 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 group-hover:scale-110 transition-transform">
+              <ShieldCheck size={18} className="stroke-[2.5]" />
+            </span>
+            <div className="text-left">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-white font-black tracking-wide">FINALIZAR GERAL REPRO (TURNO DO DIA)</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                  CONSCIENTE E CORRETO
+                </span>
+              </div>
+              <p className="text-[10px] text-indigo-200/70 font-sans font-normal hidden sm:block">
+                Consolidação geral do dia, checklist 5S e sincronização imediata com Supabase Cloud e Planilha
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-mono text-indigo-300 group-hover:translate-x-1 transition-transform flex items-center gap-1 font-black shrink-0">
+            <span>[ Encerrar Turno ➔ ]</span>
+          </span>
+        </button>
+      </div>
+
+
       {/* MODAL: CARREGAR DEMANDA REPRO */}
       {showDemandModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2096,6 +2266,19 @@ export default function StreetReplenishmentModule({
         onApplyBoxes={handleApplyCalculatorBoxes}
         initialUnit={unidadeRealizado}
       />
+
+      {/* MODAL: FECHAMENTO CONSCIENTE DE TURNO - FINALIZAR GERAL REPRO */}
+      <GeneralShiftClosureModal
+        isOpen={showShiftClosureModal}
+        onClose={() => setShowShiftClosureModal(false)}
+        logs={logs}
+        activeOperator={activeOperator}
+        activeSectorId={activeSectorId}
+        onSaveLog={onSaveLog}
+        onTriggerSync={onTriggerSync}
+        onAddToast={onAddToast}
+      />
+
 
     </div>
   );

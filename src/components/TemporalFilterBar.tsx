@@ -93,10 +93,16 @@ export default function TemporalFilterBar({
   };
 
   // Month navigation helpers
+  const getCurrentMonthDefault = () => {
+    const now = new Date();
+    return `${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+  };
+
   const handlePrevMonth = () => {
-    const [mStr, yStr] = (selectedMonthKey || '01/2026').split('/');
-    let m = parseInt(mStr, 10);
-    let y = parseInt(yStr, 10);
+    const safeKey = selectedMonthKey && selectedMonthKey.includes('/') ? selectedMonthKey : getCurrentMonthDefault();
+    const [mStr, yStr] = safeKey.split('/');
+    let m = parseInt(mStr, 10) || 1;
+    let y = parseInt(yStr, 10) || new Date().getFullYear();
     m -= 1;
     if (m < 1) {
       m = 12;
@@ -107,9 +113,10 @@ export default function TemporalFilterBar({
   };
 
   const handleNextMonth = () => {
-    const [mStr, yStr] = (selectedMonthKey || '01/2026').split('/');
-    let m = parseInt(mStr, 10);
-    let y = parseInt(yStr, 10);
+    const safeKey = selectedMonthKey && selectedMonthKey.includes('/') ? selectedMonthKey : getCurrentMonthDefault();
+    const [mStr, yStr] = safeKey.split('/');
+    let m = parseInt(mStr, 10) || 1;
+    let y = parseInt(yStr, 10) || new Date().getFullYear();
     m += 1;
     if (m > 12) {
       m = 1;
@@ -120,14 +127,12 @@ export default function TemporalFilterBar({
   };
 
   const handleSetCurrentMonth = () => {
-    const now = new Date();
-    const newKey = `${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
-    onMonthChange(newKey);
+    onMonthChange(getCurrentMonthDefault());
   };
 
   // Label formatting for Month
   const formatMonthLabel = (mKey: string) => {
-    if (!mKey) return 'Mês Atual';
+    if (!mKey || !mKey.includes('/')) return 'Mês Atual';
     const [mStr, yStr] = mKey.split('/');
     const mNum = parseInt(mStr, 10);
     const mName = MONTH_NAMES[mNum - 1] || mStr;
@@ -140,7 +145,7 @@ export default function TemporalFilterBar({
   }, [activeSectorId]);
 
   return (
-    <section className="border-panel p-4 md:p-5 rounded-2xl relative overflow-hidden bg-black/40 backdrop-blur-md border border-white/10 space-y-4">
+    <section className="repro-card p-4 sm:p-5 rounded-2xl relative overflow-hidden space-y-4">
       {/* Top Header line of filter bar */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-white/10 pb-3.5">
         <div className="flex items-center gap-2.5">
@@ -149,18 +154,18 @@ export default function TemporalFilterBar({
           </div>
           <div>
             <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
-              <span>Controlo Operacional & Filtros</span>
+              <span>Controle Operacional & Filtros</span>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             </h2>
-            <p className="text-[0.6rem] text-slate-400 font-mono mt-0.5">
+            <p className="text-[0.6rem] text-slate-400 font-sans mt-0.5">
               Setor 87 Solo • Setores 88, 89 e 90 Unificados • Visão Diária, Semanal e Mensal
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 font-mono">
-          <span className="text-[0.62rem] text-slate-300 bg-white/5 border border-white/10 px-2.5 py-1 rounded-full font-bold">
-            <strong className="text-emerald-400">{filteredLogsCount}</strong> de {totalLogsCount} registos
+        <div className="flex items-center gap-2">
+          <span className="badge-emerald">
+            <strong>{filteredLogsCount}</strong> de {totalLogsCount} registros
           </span>
         </div>
       </div>

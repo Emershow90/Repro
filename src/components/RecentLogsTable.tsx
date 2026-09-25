@@ -33,18 +33,18 @@ export default function RecentLogsTable({
   };
 
   return (
-    <section className="border-panel p-5 md:p-6 rounded-2xl relative overflow-hidden">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-5 border-b border-white/10 pb-3 gap-2">
+    <section className="repro-card p-4 sm:p-5 rounded-2xl relative overflow-hidden">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 border-b border-white/10 pb-3 gap-2">
         <div className="flex items-center gap-2.5">
           <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
             <ListFilter size={15} />
           </div>
           <div>
             <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
-              Registo de Operações Recentes
+              Registro de Operações Recentes
             </h2>
-            <p className="text-[0.6rem] text-slate-400 font-mono mt-0.5">
-              Leitura e sincronização segura em tempo real
+            <p className="text-[0.6rem] text-slate-400 font-sans mt-0.5">
+              Auditoria de movimentações e apontamentos em tempo real
             </p>
           </div>
         </div>
@@ -52,8 +52,8 @@ export default function RecentLogsTable({
         {apiUrl && (
           <button
             onClick={handleTestConnection}
-            className="text-[0.6rem] font-bold uppercase tracking-wider bg-white/5 border border-white/10 text-slate-300 hover:text-emerald-400 hover:border-emerald-500/40 px-3 py-1.5 rounded-xl cursor-pointer transition-all flex items-center gap-1.5 font-mono shadow-sm"
-            title="Clique para executar um ping de conectividade"
+            className="text-[0.62rem] font-bold uppercase tracking-wider bg-white/5 border border-white/10 text-slate-300 hover:text-emerald-400 hover:border-emerald-500/40 px-3 py-1.5 rounded-xl cursor-pointer transition-all flex items-center gap-1.5 font-mono shadow-sm"
+            title="Clique para testar conectividade com a planilha"
           >
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span>Testar Planilha (Ping)</span>
@@ -161,7 +161,7 @@ export default function RecentLogsTable({
             {logs.length === 0 && (
               <tr>
                 <td colSpan={9} className="text-center p-8 text-slate-500 font-mono text-xs">
-                  Nenhum registo gravado nesta sessão
+                  Nenhum registro gravado nesta sessão
                 </td>
               </tr>
             )}
@@ -172,14 +172,14 @@ export default function RecentLogsTable({
       <div className="mt-5 flex flex-wrap gap-3 justify-between items-center border-t border-white/10 pt-4">
         <button
           onClick={onExportBackup}
-          className="text-[0.65rem] text-blue-400 border border-blue-500/30 hover:bg-blue-500/10 px-3.5 py-1.5 rounded-xl uppercase tracking-wider transition-all cursor-pointer font-bold flex items-center gap-1.5 font-mono"
+          className="btn-term text-[0.68rem] text-cyan-400 border-cyan-500/30 hover:border-cyan-500/60 px-3.5 py-2 uppercase tracking-wider gap-1.5 cursor-pointer"
         >
           <Download size={13} />
           <span>Baixar Backup Completo (JSON)</span>
         </button>
         <button
           onClick={onClearDb}
-          className="text-[0.65rem] text-rose-400 border border-rose-500/30 hover:bg-rose-500/10 px-3.5 py-1.5 rounded-xl uppercase tracking-wider transition-all cursor-pointer font-bold flex items-center gap-1.5 font-mono"
+          className="btn-term text-[0.68rem] text-rose-400 border-rose-500/30 hover:border-rose-500/60 hover:bg-rose-500/10 px-3.5 py-2 uppercase tracking-wider gap-1.5 cursor-pointer"
         >
           <Trash2 size={13} />
           <span>Limpar Base Local</span>
