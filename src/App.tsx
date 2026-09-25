@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef, ChangeEvent } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Wifi, WifiOff, Cloud, Database, RefreshCw, AlertCircle, LogIn, LogOut, Loader2, Key, HelpCircle, ChevronDown, CheckCircle2 } from 'lucide-react';
 import { Log, AppTimerState } from './types';
 import {
@@ -41,7 +42,7 @@ import ManagementModule from './components/ManagementModule';
 import OfflineReplenishmentAssistant from './components/OfflineReplenishmentAssistant';
 import ReabastecimentoGuiado from './features/ReabastecimentoGuiado';
 import TvRadarModule from './components/TvRadarModule';
-import { ArticleAddressAuditModule } from './components/ArticleAddressAuditModule';
+import ArticleAddressAuditModule from './components/ArticleAddressAuditModule';
 import ErrorBoundary from './components/ErrorBoundary';
 
 import TabBarBead from './components/TabBarBead';
@@ -60,6 +61,10 @@ import {
   CalendarClock, 
   User, 
   Shield, 
+  ShieldCheck,
+  Lock,
+  Unlock,
+  PackageOpen,
   Monitor, 
   Terminal,
   Filter, 
@@ -75,6 +80,9 @@ import {
   ScanLine,
   Tv
 } from 'lucide-react';
+import GeneralShiftClosureModal from './components/GeneralShiftClosureModal';
+import InitialCheckpointModal from './components/InitialCheckpointModal';
+import { isShiftLocked } from './services/shiftClosureService';
 
 const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 
@@ -149,15 +157,17 @@ export default function App() {
     setIsImporting,
   } = useHistoryStore();
 
-  const defaultSheetUrl = 'https://script.google.com/macros/s/AKfycbyuTz4pZYeqgFd0P0BnmoTGfJIKtN9Cw2gwfspIqKbLFRUpjLyBJEeqBe0tfqk85cxu-w/exec';
+  const defaultSheetUrl = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SHEETS_API_URL) || 'https://script.google.com/macros/s/AKfycbwMnOu5j1J_8WK_hY5SZkvKNIgQflJgDcXPTIOghTwo7zo7-kNdhFRFXqDKFOQyVtw/exec';
+
   const [apiUrl, setApiUrl] = useState(() => {
     const saved = localStorage.getItem('repro_sheets_api_url');
-    if (!saved || saved.includes('2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2')) {
+    if (!saved || saved.includes('2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2') || saved.includes('AKfycbyuTz4pZYeqgFd0P0BnmoTGfJIKtN9Cw2gwfspIqKbLFRUpjLyBJEeqBe0tfqk85cxu-w')) {
       localStorage.setItem('repro_sheets_api_url', defaultSheetUrl);
       return defaultSheetUrl;
     }
     return saved;
   });
+
 
   const [showHelpModal, setShowHelpModal] = useState(false);
 
@@ -176,6 +186,17 @@ export default function App() {
   const [panelSubTab, setPanelSubTab] = useState<'repro' | 'ruas'>('repro');
   const [inputOpen, setInputOpen] = useState(false);
   const [ticks, setTicks] = useState(0);
+
+  // Estados de Fechamento Geral de Turno & Travamento de Edição
+  const [isShiftLockedToday, setIsShiftLockedToday] = useState<boolean>(() => isShiftLocked());
+  const [isGeneralClosureModalOpen, setIsGeneralClosureModalOpen] = useState<boolean>(false);
+  const [isInitialCheckpointModalOpen, setIsInitialCheckpointModalOpen] = useState<boolean>(false);
+  const [existingCheckpointLog, setExistingCheckpointLog] = useState<Log | null>(null);
+
+  const refreshShiftState = useCallback(() => {
+    const todayBR = formatDateToBR(new Date());
+    setIsShiftLockedToday(isShiftLocked(todayBR));
+  }, []);
 
   // Contagem regressiva para Backup Automático do IndexedDB (Padrão: 5 minutos = 300 segundos)
   const AUTO_BACKUP_INTERVAL_SECS = 300;
@@ -432,6 +453,29 @@ export default function App() {
     });
   }, [ticks, dbReady]);
 
+  // Monitoramento de Encerramento do Turno e Checkpoint de Início
+  useEffect(() => {
+    if (!dbReady) return;
+    const todayBR = formatDateToBR(new Date());
+    const todayISO = new Date().toISOString().slice(0, 10);
+    
+    // Atualiza estado de travamento de turno
+    setIsShiftLockedToday(isShiftLocked(todayBR));
+
+    // Busca se já existe checkpoint de início hoje
+    const cpLog = logs.find(l => 
+      (l.data === todayBR || l.data === todayISO) && 
+      l.atividade?.toUpperCase().includes('INÍCIO_DIA')
+    );
+    setExistingCheckpointLog(cpLog || null);
+
+    // Se não há checkpoint registrado hoje, não foi dispensado pelo operador e o turno não está finalizado:
+    const dismissed = localStorage.getItem(`repro_checkpoint_dismissed_${todayBR}`) === 'true';
+    if (!cpLog && !dismissed && !isShiftLocked(todayBR)) {
+      setIsInitialCheckpointModalOpen(true);
+    }
+  }, [dbReady, logs]);
+
   // Sincronização Bidirecional Multi-Dispositivo (PDT ↔ PC ↔ Google Sheets / Nuvem)
   const syncMultiDevice = useCallback(async (options: { silent?: boolean; forceAlert?: boolean } = {}) => {
     const { silent = false, forceAlert = false } = options;
@@ -595,6 +639,15 @@ export default function App() {
   };
 
   const saveLogAndSync = async (log: Log) => {
+    // Verificação de travamento de edição pós-fechamento consciente
+    const isClosureLog = log.atividade?.toUpperCase().includes('FECHAMENTO GERAL DE TURNO');
+    const isCheckpointLog = log.atividade?.toUpperCase().includes('INÍCIO_DIA');
+    if (!isClosureLog && !isCheckpointLog && isShiftLocked(log.data)) {
+      addToast(`O turno do dia ${log.data} está FINALIZADO e com edições travadas. Reabra o turno no cabeçalho se precisar fazer novos lançamentos.`, 'var(--color-warning)');
+      pdtAudio.playScanError();
+      return;
+    }
+
     await saveLog(log);
     setLogs(prev => [log, ...prev]);
     
@@ -610,6 +663,13 @@ export default function App() {
   };
 
   const handleSaveStreetLog = async (newLog: Log) => {
+    // Verificação de travamento de edição pós-fechamento consciente
+    if (isShiftLocked(newLog.data)) {
+      addToast(`O turno do dia ${newLog.data} está FINALIZADO e com edições travadas. Reabra o turno no cabeçalho para registrar novos apontamentos.`, 'var(--color-warning)');
+      pdtAudio.playScanError();
+      return;
+    }
+
     await saveLog(newLog);
     setLogs(prev => [newLog, ...prev]);
     addToast(`Apontamento da ${newLog.rua || 'Rua'} guardado com sucesso!`, 'var(--color-success)');
@@ -761,6 +821,13 @@ export default function App() {
   };
 
   const handleDeleteLog = async (id: number) => {
+    const logToDelete = logs.find(l => l.id === id);
+    if (logToDelete && isShiftLocked(logToDelete.data)) {
+      addToast(`O turno do dia ${logToDelete.data} está FINALIZADO e com edições travadas. Reabra o turno no cabeçalho antes de remover registros.`, 'var(--color-warning)');
+      pdtAudio.playScanError();
+      return;
+    }
+
     if (confirm("Deseja remover este registo permanentemente?")) {
       await deleteLog(id);
       addToast("Registo removido localmente.", 'var(--color-warning)');
@@ -914,7 +981,7 @@ export default function App() {
     ];
 
     if (!isAuthUnlocked) {
-      return allTabs.filter(tab => !['gestao', 'historico', 'followup'].includes(tab.id));
+      return allTabs.filter(tab => !['gestao', 'followup'].includes(tab.id));
     }
     return allTabs;
   }, [isAuthUnlocked]);
@@ -985,8 +1052,8 @@ export default function App() {
 
       <div className="w-full max-w-6xl space-y-4 relative z-10">
         
-        {/* NOVO CABEÇALHO REESTRUTURADO // REAPRO COMMAND COCKPIT */}
-        <header className="p-3.5 bg-slate-950/90 border border-white/15 rounded-2xl shadow-2xl backdrop-blur-xl space-y-3 relative overflow-hidden">
+        {/* NOVO CABEÇALHO REESTRUTURADO // REPRO COMMAND COCKPIT */}
+        <header className="repro-card-elevated p-3.5 sm:p-4 rounded-2xl shadow-2xl space-y-3 relative overflow-hidden">
           {/* Top Line: Brand identity + Sector badge + System quick actions */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
             <div className="flex items-center gap-3">
@@ -997,21 +1064,21 @@ export default function App() {
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h1 className="font-mono text-sm font-black text-white tracking-widest uppercase">
-                      REAPRO <span className="text-emerald-400">TORRE 5.0</span>
+                    <h1 className="font-mono text-sm sm:text-base font-black text-white tracking-widest uppercase">
+                      REPRO // <span className="text-emerald-400">TORRE 5.0</span>
                     </h1>
-                    <span className="text-[0.55rem] font-bold font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                    <span className="badge-emerald">
                       LIVE
                     </span>
                   </div>
-                  <p className="text-[0.6rem] text-slate-400 font-mono">
-                    Terminal Logístico &amp; Controle Operacional de Produtividade
+                  <p className="text-[0.62rem] text-slate-400 font-sans">
+                    Terminal de Reabastecimento &amp; Controle Operacional de Produtividade
                   </p>
                 </div>
               </div>
 
               {/* Setor Ativo Quick Selector Pills */}
-              <div className="hidden sm:flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-white/10 text-xs font-mono">
+              <div className="hidden sm:flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/10 text-xs font-mono">
                 <span className="text-slate-400 text-[0.55rem] uppercase px-1.5 font-bold">Setor:</span>
                 {SECTOR_OPTIONS.map(opt => (
                   <button
@@ -1033,6 +1100,53 @@ export default function App() {
 
             {/* Right Status Badges & Quick Actions */}
             <div className="flex items-center gap-2">
+              {/* Checkpoint de Início (Abertura / Saldo Inicial de Caixas) */}
+              <button
+                id="btn-header-checkpoint-inicio"
+                type="button"
+                onClick={() => setIsInitialCheckpointModalOpen(true)}
+                className={`px-2.5 py-1.5 rounded-xl border text-xs font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  existingCheckpointLog
+                    ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/20'
+                    : 'bg-slate-900 border-white/10 text-slate-300 hover:text-white hover:border-white/20'
+                }`}
+                title={
+                  existingCheckpointLog
+                    ? `Checkpoint Inicial gravado (${existingCheckpointLog.volumes} caixas). Clique para consultar ou atualizar.`
+                    : 'Registrar Checkpoint de Início (Saldo de caixas na fila antes de começar)'
+                }
+              >
+                <PackageOpen size={13} className={existingCheckpointLog ? 'text-emerald-400' : 'text-slate-400'} />
+                <span className="hidden lg:inline text-[0.65rem] font-bold">
+                  {existingCheckpointLog ? `Início: ${existingCheckpointLog.volumes} cx` : 'Checkpoint'}
+                </span>
+              </button>
+
+              {/* Função Finalizar Turno Geral / Badge de Travamento 'TURNO FINALIZADO' */}
+              {isShiftLockedToday ? (
+                <button
+                  id="btn-header-turno-finalizado"
+                  type="button"
+                  onClick={() => setIsGeneralClosureModalOpen(true)}
+                  className="px-3 py-1.5 rounded-xl border border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 text-xs font-mono font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-amber-500/15 animate-pulse"
+                  title="Turno de hoje finalizado e edições travadas. Clique para visualizar o resumo consolidado, exportar CSV ou reabrir o turno."
+                >
+                  <Lock size={13} className="text-amber-400 shrink-0" />
+                  <span className="text-[0.65rem] font-black uppercase tracking-wider">Turno Finalizado</span>
+                </button>
+              ) : (
+                <button
+                  id="btn-header-finalizar-turno"
+                  type="button"
+                  onClick={() => setIsGeneralClosureModalOpen(true)}
+                  className="px-2.5 py-1.5 rounded-xl border border-indigo-500/40 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-200 hover:text-white text-xs font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm hover:border-indigo-400 active:scale-95"
+                  title="Finalizar Turno Geral: Consolidação de produtividade, verificação de meta, travamento de edição e sincronização garantida"
+                >
+                  <ShieldCheck size={14} className="text-indigo-400 shrink-0" />
+                  <span className="hidden sm:inline text-[0.65rem] font-black uppercase tracking-wider">Finalizar Turno</span>
+                </button>
+              )}
+
               {/* Active Stopwatch Ticker */}
               <button
                 type="button"
@@ -1120,11 +1234,11 @@ export default function App() {
                     onClick={() => handleTabChange(tab.id as TabType)}
                     className={`px-3 py-2 rounded-xl text-xs font-mono font-bold uppercase flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                       isActive
-                        ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-black shadow-lg shadow-emerald-500/25 scale-[1.02]'
-                        : 'bg-slate-900/80 border border-white/10 text-slate-400 hover:text-white hover:bg-slate-800 hover:border-white/20'
+                        ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/25 font-black scale-[1.01]'
+                        : 'bg-white/5 border border-white/10 text-slate-300 hover:text-white hover:bg-white/10 hover:border-emerald-500/30'
                     }`}
                   >
-                    <span className={isActive ? 'text-black' : 'text-slate-400'}>
+                    <span className={isActive ? 'text-black' : 'text-emerald-400'}>
                       {tab.icon}
                     </span>
                     <span className="text-[0.65rem] tracking-wider">{tab.label}</span>
@@ -1132,7 +1246,7 @@ export default function App() {
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                     )}
                     {isActive && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-black/60" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-black/70" />
                     )}
                   </button>
                 );
@@ -1143,7 +1257,16 @@ export default function App() {
 
 
 
-        {/* CONTEÚDO DINÂMICO DE ACORDO COM A ABA ATIVA */}
+        {/* CONTEÚDO DINÂMICO DE ACORDO COM A ABA ATIVA COM TRANSIÇÃO SUAVE */}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, x: 14 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -14 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+            className="w-full space-y-6"
+          >
         
         {/* ABA 1: CRONÔMETRO (ACESSO LIVRE SEM LOGIN) */}
         {activeTab === 'cronometro' && (
@@ -1282,7 +1405,9 @@ export default function App() {
                 activeSectorId={activeSectorId}
                 onSaveLog={handleSaveStreetLog}
                 onAddToast={addToast}
+                onTriggerSync={() => sincronizarFila(true)}
               />
+
             </ErrorBoundary>
           </div>
         )}
@@ -1293,11 +1418,11 @@ export default function App() {
             <ErrorBoundary fallbackTitle="Auditoria de Artigo, Endereço e CTN">
               <ArticleAddressAuditModule
                 logs={logs}
-                onNavigateToStreet={(st) => {
+                onNavigateToStreet={(st: string) => {
                   handleTabChange('ruas');
                   addToast(`Foco direcionado para a rua ${st}`, 'var(--color-info)');
                 }}
-                onNotify={(msg, color) => addToast(msg, color || 'var(--color-info)')}
+                onNotify={(msg: string, color?: string) => addToast(msg, color || 'var(--color-info)')}
               />
             </ErrorBoundary>
           </div>
@@ -1429,35 +1554,22 @@ export default function App() {
           )
         )}
 
-        {/* ABA 4: HISTÓRICO DE LOGS (PROTEGIDO POR LOGIN) */}
+        {/* ABA 4: HISTÓRICO DE LOGS & MAPA DE CALOR (ACESSO LIVRE & RÁPIDO) */}
         {activeTab === 'historico' && (
-          !isAuthUnlocked ? (
-            <AuthLoginCard
-              requestedTabName="Histórico de Logs"
-              onNavigateToTab={(t) => handleTabChange(t)}
-              onLoginSuccess={(u) => {
-                setUser(u);
-                localStorage.setItem('repro_local_user', JSON.stringify(u));
-              }}
-              onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
-              onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
+          <div className="animate-fade-in">
+            <HistoryTab 
+              logs={logs} 
+              apiUrl={apiUrl}
+              onRefresh={async () => {
+                const refreshedLogs = await getLogs();
+                setLogs(refreshedLogs);
+              }} 
+              onAddToast={addToast}
+              onImportCloud={importarPlanilha}
+              onRetrySync={handleRetrySyncLog}
+              userUid={user?.id || user?.uid}
             />
-          ) : (
-            <div className="animate-fade-in">
-              <HistoryTab 
-                logs={logs} 
-                apiUrl={apiUrl}
-                onRefresh={async () => {
-                  const refreshedLogs = await getLogs();
-                  setLogs(refreshedLogs);
-                }} 
-                onAddToast={addToast}
-                onImportCloud={importarPlanilha}
-                onRetrySync={handleRetrySyncLog}
-                userUid={user?.id || user?.uid}
-              />
-            </div>
-          )
+          </div>
         )}
 
         {/* ABA 5: FOLLOW-UP SEMANAL (PROTEGIDO POR LOGIN) */}
@@ -1488,6 +1600,8 @@ export default function App() {
             </div>
           )
         )}
+          </motion.div>
+        </AnimatePresence>
 
         {/* IBM AS/400 5250 RETRO COMMAND & FUNCTION KEY BAR */}
         {theme === 'as400' && (
@@ -1535,6 +1649,34 @@ export default function App() {
 
       {/* SOLICITAÇÃO DE PEDIDO - FLOATING BUTTON */}
       <FormModalFloatingButton />
+
+      {/* MODAL: FECHAMENTO CONSCIENTE DE TURNO GERAL (Cockpit Header / Badge) */}
+      <GeneralShiftClosureModal
+        isOpen={isGeneralClosureModalOpen}
+        onClose={() => {
+          setIsGeneralClosureModalOpen(false);
+          refreshShiftState();
+        }}
+        logs={logs}
+        activeOperator={activeOperator}
+        activeSectorId={activeSectorId}
+        onSaveLog={saveLogAndSync}
+        onTriggerSync={() => sincronizarFila(true)}
+        onAddToast={addToast}
+        onShiftStateChanged={refreshShiftState}
+      />
+
+      {/* MODAL: CHECKPOINT DE INÍCIO DO TURNO (ABERTURA OPERACIONAL) */}
+      <InitialCheckpointModal
+        isOpen={isInitialCheckpointModalOpen}
+        onClose={() => setIsInitialCheckpointModalOpen(false)}
+        onSaveCheckpoint={saveLogAndSync}
+        activeOperator={activeOperator}
+        activeSectorId={activeSectorId}
+        existingCheckpointLog={existingCheckpointLog}
+        onAddToast={addToast}
+        onTriggerSync={() => sincronizarFila(true)}
+      />
     </div>
   );
 }
