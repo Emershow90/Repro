@@ -183,7 +183,20 @@ async function startServer() {
     isInternalIp: boolean;
     userAgent?: string;
     lastHeartbeat: number;
-    historicoHoje?: { rua: string; setor: string; volumes: number; horario: string; vph?: string }[];
+    tempoTotalGeralSegundos?: number;
+    enderecosTotalGeral?: number;
+    volumesTotalGeral?: number;
+    historicoHoje?: {
+      rua: string;
+      setor: string;
+      volumes: number;
+      enderecos?: number;
+      tempoSegundos?: number;
+      tempoMinutos?: number;
+      horario: string;
+      vph?: string;
+      eph?: string;
+    }[];
   }
 
   const activeTelemetryMap = new Map<string, LiveTelemetryRecord>();
@@ -301,10 +314,13 @@ async function startServer() {
       clientIp: '192.168.1.104',
       isInternalIp: true,
       lastHeartbeat: Date.now(),
+      tempoTotalGeralSegundos: 6960, // 1h 56m total hoje
+      enderecosTotalGeral: 86,
+      volumesTotalGeral: 195,
       historicoHoje: [
-        { rua: 'B4UZ', setor: '87', volumes: 45, horario: '07:35', vph: '44.0' },
-        { rua: 'B4VA', setor: '87', volumes: 50, horario: '08:15', vph: '47.5' },
-        { rua: 'B4VB', setor: '87', volumes: 58, horario: '09:05', vph: '46.0' }
+        { rua: 'B4UZ', setor: '87', volumes: 45, enderecos: 20, tempoSegundos: 1800, tempoMinutos: 30, horario: '07:35', vph: '45.0', eph: '20.0' },
+        { rua: 'B4VA', setor: '87', volumes: 50, enderecos: 22, tempoSegundos: 1920, tempoMinutos: 32, horario: '08:15', vph: '46.9', eph: '20.6' },
+        { rua: 'B4VB', setor: '87', volumes: 58, enderecos: 26, tempoSegundos: 2100, tempoMinutos: 35, horario: '09:05', vph: '49.7', eph: '22.3' }
       ]
     });
   }
@@ -328,6 +344,9 @@ async function startServer() {
         eph,
         ultimaAcao,
         ultimoBipeTs,
+        tempoTotalGeralSegundos,
+        enderecosTotalGeral,
+        volumesTotalGeral,
         historicoHoje
       } = req.body;
 
@@ -352,6 +371,9 @@ async function startServer() {
         isInternalIp: isIpInternal(clientIp),
         userAgent: req.headers['user-agent']?.substring(0, 120),
         lastHeartbeat: Date.now(),
+        tempoTotalGeralSegundos: tempoTotalGeralSegundos ? Number(tempoTotalGeralSegundos) : undefined,
+        enderecosTotalGeral: enderecosTotalGeral ? Number(enderecosTotalGeral) : undefined,
+        volumesTotalGeral: volumesTotalGeral ? Number(volumesTotalGeral) : undefined,
         historicoHoje: Array.isArray(historicoHoje) ? historicoHoje : []
       };
 
