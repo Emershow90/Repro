@@ -239,7 +239,7 @@ export interface As400AuditComparisonRow {
 export interface AuditLog {
   id: string;
   timestamp: number;
-  tipo: 'INVERSAO_ETIQUETA' | 'VINCULACAO_INVALIDA' | 'EXCESSO_TEMPO_SEM_BIPE';
+  tipo: 'INVERSAO_ETIQUETA' | 'VINCULACAO_INVALIDA' | 'EXCESSO_TEMPO_SEM_BIPE' | 'AUDITORIA_5S' | 'FECHAMENTO_TURNO' | 'CHECKPOINT_INICIO' | 'REABERTURA_TURNO';
   setor: string;
   rua: string;
   operador: string;
