@@ -4,7 +4,7 @@
  * Supabase Automated IndexedDB Snapshot Backup Service
  */
 
-import { exportDatabaseSnapshot, getState, saveState, DatabaseSnapshot } from './dbLocal';
+import { exportDatabaseSnapshot, importDatabaseSnapshot, getState, saveState, DatabaseSnapshot } from './dbLocal';
 
 export interface SupabaseBackupConfig {
   url: string;
@@ -18,12 +18,16 @@ export interface SupabaseBackupConfig {
   totalBackupsCompleted?: number;
 }
 
+const DEFAULT_ENV_URL = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_URL) || 'https://fltgvymwobtzhenvycau.supabase.co';
+const DEFAULT_ENV_KEY = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_ANON_KEY) || 'sb_publishable_l1wBxR0wj_4pMi1MATLycA_XMtSLQca';
+
+
 export const DEFAULT_BACKUP_CONFIG: SupabaseBackupConfig = {
-  url: '',
-  anonKey: '',
+  url: DEFAULT_ENV_URL,
+  anonKey: DEFAULT_ENV_KEY,
   tableName: 'repro_backups',
-  autoBackupEnabled: false,
-  autoBackupIntervalMinutes: 60,
+  autoBackupEnabled: true,
+  autoBackupIntervalMinutes: 30,
   lastBackupStatus: 'idle',
   totalBackupsCompleted: 0
 };
@@ -58,16 +62,29 @@ CREATE POLICY "Permitir consulta de snapshots"
 `;
 
 /**
- * Carrega a configuração salva de backup
+ * Carrega a configuração salva de backup com fallback inteligente para variáveis de ambiente
  */
 export async function getBackupConfig(): Promise<SupabaseBackupConfig> {
   try {
     const saved = await getState<SupabaseBackupConfig>(STORAGE_KEY);
-    if (saved) return { ...DEFAULT_BACKUP_CONFIG, ...saved };
+    if (saved) {
+      return {
+        ...DEFAULT_BACKUP_CONFIG,
+        ...saved,
+        url: saved.url || DEFAULT_ENV_URL,
+        anonKey: saved.anonKey || DEFAULT_ENV_KEY
+      };
+    }
     
     const local = localStorage.getItem(STORAGE_KEY);
     if (local) {
-      return { ...DEFAULT_BACKUP_CONFIG, ...JSON.parse(local) };
+      const parsed = JSON.parse(local);
+      return {
+        ...DEFAULT_BACKUP_CONFIG,
+        ...parsed,
+        url: parsed.url || DEFAULT_ENV_URL,
+        anonKey: parsed.anonKey || DEFAULT_ENV_KEY
+      };
     }
   } catch (err) {
     console.warn('Erro ao carregar configuração de backup Supabase:', err);
@@ -189,4 +206,124 @@ export async function listRecentCloudBackups(limit = 10): Promise<any[]> {
     console.warn('Erro ao listar backups recentes do Supabase:', err);
     return [];
   }
+}
+
+/**
+ * Testa a conexão com o Supabase
+ */
+export async function testSupabaseConnection(
+  configOrUrl?: SupabaseBackupConfig | string,
+  customKey?: string,
+  customTable?: string
+): Promise<{ success: boolean; message: string; ms: number }> {
+  let baseUrl = '';
+  let apiKey = '';
+  let tableName = 'repro_backups';
+
+  if (typeof configOrUrl === 'object' && configOrUrl !== null) {
+    baseUrl = (configOrUrl.url || '').trim().replace(/\/$/, '');
+    apiKey = (configOrUrl.anonKey || '').trim();
+    tableName = (configOrUrl.tableName || 'repro_backups').trim();
+  } else {
+    const config = await getBackupConfig();
+    baseUrl = (configOrUrl || config.url || '').trim().replace(/\/$/, '');
+    apiKey = (customKey || config.anonKey || '').trim();
+    tableName = (customTable || config.tableName || 'repro_backups').trim();
+  }
+
+
+  if (!baseUrl || !apiKey) {
+    return { success: false, message: 'URL e Chave Anônima do Supabase são obrigatórias.', ms: 0 };
+  }
+
+  const start = performance.now();
+  try {
+    const endpoint = `${baseUrl}/rest/v1/${tableName}?select=id&limit=1`;
+    const response = await fetch(endpoint, {
+      headers: {
+        'apikey': apiKey,
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const elapsed = Math.round(performance.now() - start);
+
+    if (response.ok) {
+      return {
+        success: true,
+        message: `Conexão com Supabase estabelecida com sucesso! (${elapsed}ms)`,
+        ms: elapsed
+      };
+    } else {
+      const errText = await response.text();
+      let hint = '';
+      if (response.status === 404 || errText.includes('relation') || errText.includes('does not exist')) {
+        hint = ` | Tabela '${tableName}' não encontrada. Crie-a usando o script SQL no painel.`;
+      }
+      return {
+        success: false,
+        message: `Falha HTTP ${response.status}: ${errText.slice(0, 100)}${hint}`,
+        ms: elapsed
+      };
+    }
+  } catch (err: any) {
+    const elapsed = Math.round(performance.now() - start);
+    return {
+      success: false,
+      message: `Erro de rede ao contactar Supabase: ${err?.message || 'Falha de conexão'}`,
+      ms: elapsed
+    };
+  }
+}
+
+/**
+ * Baixa e restaura o snapshot mais recente salvo no Supabase
+ * Permite que outros celulares ou PDTs baixem o histórico completo do dia
+ */
+export async function restoreLatestSnapshotFromSupabase(
+  customConfig?: Partial<SupabaseBackupConfig>
+): Promise<{
+  success: boolean;
+  message: string;
+  importedCounts?: { importedLogs: number; importedStates: number; importedAudits: number };
+}> {
+  const currentCfg = await getBackupConfig();
+  const config = { ...currentCfg, ...customConfig };
+  const baseUrl = config.url.trim().replace(/\/$/, '');
+  const apiKey = config.anonKey.trim();
+  const tableName = (config.tableName || 'repro_backups').trim();
+
+  if (!baseUrl || !apiKey) {
+    throw new Error('Configure a URL e a Chave de API do Supabase antes de restaurar dados.');
+  }
+
+  const endpoint = `${baseUrl}/rest/v1/${tableName}?select=id,created_at,snapshot_data,logs_count&order=created_at.desc&limit=1`;
+  const response = await fetch(endpoint, {
+    headers: {
+      'apikey': apiKey,
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Erro ao buscar snapshot no Supabase (${response.status}): ${errText.slice(0, 100)}`);
+  }
+
+  const rows = await response.json();
+  if (!rows || rows.length === 0 || !rows[0].snapshot_data) {
+    throw new Error('Nenhum snapshot de backup foi encontrado na tabela do Supabase.');
+  }
+
+  const latestRow = rows[0];
+  const snapshotData = latestRow.snapshot_data as DatabaseSnapshot;
+  const imported = await importDatabaseSnapshot(snapshotData);
+
+  return {
+    success: true,
+    message: `Restauração concluída! ${imported.importedLogs} registros mesclados da nuvem sem perda de dados.`,
+    importedCounts: imported
+  };
 }

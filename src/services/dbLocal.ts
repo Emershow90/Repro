@@ -683,3 +683,72 @@ export async function exportDatabaseSnapshot(): Promise<DatabaseSnapshot> {
     }
   });
 }
+
+/**
+ * Importa e mescla um snapshot de banco de dados (vindos do Supabase ou backup JSON)
+ * Evita duplicações e preserva dados já existentes localmente.
+ */
+export async function importDatabaseSnapshot(snapshot: DatabaseSnapshot): Promise<{
+  importedLogs: number;
+  importedStates: number;
+  importedAudits: number;
+}> {
+  if (!snapshot || !snapshot.data) {
+    throw new Error('Snapshot inválido ou corrompido.');
+  }
+
+  const db = dbInstance || await initDb();
+  return new Promise((resolve, reject) => {
+    try {
+      const stores = ['logs', 'audit_logs', 'state', 'validation_rules'].filter(s => db.objectStoreNames.contains(s));
+      const tx = db.transaction(stores, 'readwrite');
+
+      let importedLogs = 0;
+      let importedStates = 0;
+      let importedAudits = 0;
+
+      // 1. Logs
+      if (stores.includes('logs') && Array.isArray(snapshot.data.logs)) {
+        const logsStore = tx.objectStore('logs');
+        snapshot.data.logs.forEach(log => {
+          if (log && log.id) {
+            logsStore.put(log);
+            importedLogs++;
+          }
+        });
+      }
+
+      // 2. State
+      if (stores.includes('state') && Array.isArray(snapshot.data.states)) {
+        const stateStore = tx.objectStore('state');
+        snapshot.data.states.forEach(st => {
+          if (st && st.key) {
+            stateStore.put(st);
+            importedStates++;
+          }
+        });
+      }
+
+      // 3. Audit logs
+      if (stores.includes('audit_logs') && Array.isArray(snapshot.data.auditLogs)) {
+        const auditStore = tx.objectStore('audit_logs');
+        snapshot.data.auditLogs.forEach(aud => {
+          if (aud && aud.id) {
+            auditStore.put(aud);
+            importedAudits++;
+          }
+        });
+      }
+
+      tx.oncomplete = () => {
+        telemetry.info('IndexedDB', `Snapshot mesclado: ${importedLogs} logs, ${importedStates} estados.`);
+        resolve({ importedLogs, importedStates, importedAudits });
+      };
+
+      tx.onerror = () => reject(tx.error);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+

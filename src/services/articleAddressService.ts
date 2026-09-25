@@ -14,8 +14,8 @@ export interface ArticleAddressRecord {
   id: string;
   data: string; // YYYY-MM-DD
   artigo: string; // Código ou SKU do Artigo
-  endereco: string; // Ex: B4VD-02, B4VA-01
-  ctn: number; // Quantidade de Containers / Caixas
+  endereco: string; // Endereço final (Z.ap)
+  ctn: string; // Cont. Novo (Caixa)
   rua: string; // Ex: B4VD
   setor: string; // 87, 88, 89, 90 ou OUTROS
   hora?: string; // HH:MM
@@ -25,6 +25,13 @@ export interface ArticleAddressRecord {
   statusAuditoria: 'VALIDADO' | 'ALERTA' | 'INCONSISTENTE';
   mensagensAuditoria: string[];
   criadoEm: number;
+  contenantPai?: string;
+  enderecoOrigem?: string;
+  zonaOrigem?: string;
+  enderecoTampao?: string;
+  zonaDestino?: string;
+  unidade?: string;
+  volumes?: number;
 }
 
 export interface ArticleAddressStats {
@@ -218,7 +225,7 @@ function getInitialSeedRecords(): ArticleAddressRecord[] {
       data: hoje,
       artigo: 'ART-3091',
       endereco: 'B4VD-01',
-      ctn: 14,
+      ctn: '14',
       rua: 'B4VD',
       setor: '87',
       hora: '08:15',
@@ -232,7 +239,7 @@ function getInitialSeedRecords(): ArticleAddressRecord[] {
       data: hoje,
       artigo: 'ART-3091',
       endereco: 'B4VD-02',
-      ctn: 10,
+      ctn: '10',
       rua: 'B4VD',
       setor: '87',
       hora: '08:30',
@@ -246,7 +253,7 @@ function getInitialSeedRecords(): ArticleAddressRecord[] {
       data: hoje,
       artigo: 'ART-4420',
       endereco: 'B4VD-03',
-      ctn: 18,
+      ctn: '18',
       rua: 'B4VD',
       setor: '87',
       hora: '08:45',
@@ -260,7 +267,7 @@ function getInitialSeedRecords(): ArticleAddressRecord[] {
       data: hoje,
       artigo: 'ART-8105',
       endereco: 'B4VA-01',
-      ctn: 22,
+      ctn: '22',
       rua: 'B4VA',
       setor: '87',
       hora: '09:10',
@@ -274,7 +281,7 @@ function getInitialSeedRecords(): ArticleAddressRecord[] {
       data: hoje,
       artigo: 'ART-8105',
       endereco: 'B4VA-02',
-      ctn: 12,
+      ctn: '12',
       rua: 'B4VA',
       setor: '87',
       hora: '09:25',
@@ -288,7 +295,7 @@ function getInitialSeedRecords(): ArticleAddressRecord[] {
       data: hoje,
       artigo: 'ART-9921',
       endereco: 'B4VB-04',
-      ctn: 8,
+      ctn: '8',
       rua: 'B4VB',
       setor: '87',
       hora: '10:00',
@@ -302,7 +309,7 @@ function getInitialSeedRecords(): ArticleAddressRecord[] {
       data: ontem,
       artigo: 'ART-5012',
       endereco: 'B4UZ-01',
-      ctn: 16,
+      ctn: '16',
       rua: 'B4UZ',
       setor: '87',
       hora: '14:20',
@@ -316,7 +323,7 @@ function getInitialSeedRecords(): ArticleAddressRecord[] {
       data: ontem,
       artigo: 'ART-5012',
       endereco: 'B4UZ-02',
-      ctn: 20,
+      ctn: '20',
       rua: 'B4UZ',
       setor: '87',
       hora: '14:40',
@@ -330,7 +337,7 @@ function getInitialSeedRecords(): ArticleAddressRecord[] {
       data: anteontem,
       artigo: 'ART-3091',
       endereco: 'B5VG-01',
-      ctn: 25,
+      ctn: '25',
       rua: 'B5VG',
       setor: '88',
       hora: '11:15',
@@ -662,52 +669,29 @@ export function parsePastedSpreadsheetText(
 
   for (let i = startIndex; i < lines.length; i++) {
     const line = lines[i];
-    // Divide por TAB (\t) ou por ponto e vírgula (;) ou vírgula (,)
-    let cols = line.split('\t');
-    if (cols.length < 2) {
-      cols = line.split(';');
-    }
-    if (cols.length < 2) {
-      cols = line.split(',');
-    }
+    const cols = line.split('\t');
 
-    if (cols.length >= 2) {
-      const col0 = cols[0]?.trim() || '';
-      const col1 = cols[1]?.trim() || '';
-      const col2 = cols[2]?.trim() || '1';
-      const col3 = cols[3]?.trim() || defaultDate;
+    if (cols.length >= 11) {
+      const data = cols[0];
+      const contenantPai = cols[1];
+      const enderecoOrigem = cols[2];
+      const zonaOrigem = cols[3];
+      const artigo = cols[4];
+      const ctn = cols[5];
+      const enderecoTampao = cols[6];
+      const zonaDestino = cols[7];
+      const endereco = cols[8];
+      const unidade = cols[9];
+      const volumes = parseInt(cols[10], 10);
 
-      // Heurística de identificação de colunas:
-      // Se col0 parece endereço (ex: B4VD-01) e col1 parece artigo
-      let artigo = col0;
-      let endereco = col1;
-      let ctnStr = col2;
-      let data = col3;
-
-      if (col0.includes('-') && !col1.includes('-')) {
-        endereco = col0;
-        artigo = col1;
-      }
-
-      // Normaliza data (se for DD/MM/AAAA converte para AAAA-MM-DD)
-      if (data.includes('/')) {
-        const parts = data.split('/');
-        if (parts.length === 3) {
-          if (parts[2].length === 4) {
-            data = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-          }
-        }
-      }
-
-      const ctnVal = parseInt(ctnStr.replace(/[^0-9]/g, ''), 10) || 1;
       const { rua, setor } = parseStreetAndSectorFromAddress(endereco);
 
       const candidate: ArticleAddressRecord = {
-        id: `rec-imp-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6)}`,
+        id: `rec-wms-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6)}`,
         data: data || defaultDate,
         artigo: artigo.toUpperCase(),
         endereco: endereco.toUpperCase(),
-        ctn: ctnVal,
+        ctn: ctn,
         rua: rua.toUpperCase(),
         setor,
         hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
@@ -715,7 +699,14 @@ export function parsePastedSpreadsheetText(
         origem: 'PLANILHA',
         statusAuditoria: 'VALIDADO',
         mensagensAuditoria: [],
-        criadoEm: Date.now() + i
+        criadoEm: Date.now() + i,
+        contenantPai,
+        enderecoOrigem,
+        zonaOrigem,
+        enderecoTampao,
+        zonaDestino,
+        unidade,
+        volumes
       };
 
       const audit = auditArticleAddressRecord(candidate, validRecords);
@@ -728,6 +719,7 @@ export function parsePastedSpreadsheetText(
         errorCount++;
       }
     } else {
+      // Fallback for existing simpler formats
       errorCount++;
     }
   }
@@ -743,9 +735,16 @@ export function exportRecordsToExcel(records: ArticleAddressRecord[], fileName: 
     'Data de Registro': r.data,
     'Setor': r.setor,
     'Rua': r.rua,
-    'Endereço': r.endereco,
+    'Endereço Final': r.endereco,
     'Artigo': r.artigo,
-    'CTN (Caixas)': r.ctn,
+    'CTN (Caixa)': r.ctn,
+    'Cont. Pai': r.contenantPai || '',
+    'End. Origem': r.enderecoOrigem || '',
+    'Zona Origem': r.zonaOrigem || '',
+    'End. Tampão': r.enderecoTampao || '',
+    'Zona Destino': r.zonaDestino || '',
+    'Uni': r.unidade || '',
+    'Qtd': r.volumes || 0,
     'Status Auditoria': r.statusAuditoria,
     'Mensagens de Auditoria': r.mensagensAuditoria.join('; '),
     'Origem': r.origem,

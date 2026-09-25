@@ -7,6 +7,18 @@
  * Suporte a IP Interno (Wi-Fi/LAN) e IP Externo (Nuvem / WAN)
  */
 
+export interface TelemetryHistoryItem {
+  rua: string;
+  setor: string;
+  volumes: number;
+  enderecos?: number;
+  tempoSegundos?: number;
+  tempoMinutos?: number;
+  horario: string;
+  vph?: string;
+  eph?: string;
+}
+
 export interface TelemetryPayload {
   deviceId?: string;
   clientIp?: string;
@@ -24,7 +36,10 @@ export interface TelemetryPayload {
   eph: string;
   ultimaAcao?: string;
   ultimoBipeTs?: number;
-  historicoHoje?: { rua: string; setor: string; volumes: number; horario: string; vph?: string }[];
+  tempoTotalGeralSegundos?: number;
+  enderecosTotalGeral?: number;
+  volumesTotalGeral?: number;
+  historicoHoje?: TelemetryHistoryItem[];
 }
 
 export interface NetworkInfo {
@@ -85,6 +100,9 @@ export async function sendTelemetryHeartbeat(data: Partial<TelemetryPayload>): P
       eph: data.eph || '0.0',
       ultimaAcao: data.ultimaAcao || 'Operação ativa no coletor',
       ultimoBipeTs: data.ultimoBipeTs || Date.now(),
+      tempoTotalGeralSegundos: data.tempoTotalGeralSegundos,
+      enderecosTotalGeral: data.enderecosTotalGeral,
+      volumesTotalGeral: data.volumesTotalGeral,
       historicoHoje: data.historicoHoje || []
     };
 
