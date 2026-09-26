@@ -157,12 +157,16 @@ export default function App() {
     setIsImporting,
   } = useHistoryStore();
 
-  const defaultSheetUrl = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SHEETS_API_URL) || 'https://script.google.com/macros/s/AKfycbwMnOu5j1J_8WK_hY5SZkvKNIgQflJgDcXPTIOghTwo7zo7-kNdhFRFXqDKFOQyVtw/exec';
+  const defaultSheetUrl = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SHEETS_API_URL) || '';
 
   const [apiUrl, setApiUrl] = useState(() => {
     const saved = localStorage.getItem('repro_sheets_api_url');
-    if (!saved || saved.includes('2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2') || saved.includes('AKfycbyuTz4pZYeqgFd0P0BnmoTGfJIKtN9Cw2gwfspIqKbLFRUpjLyBJEeqBe0tfqk85cxu-w')) {
-      localStorage.setItem('repro_sheets_api_url', defaultSheetUrl);
+    if (!saved || saved.includes('2PACX-1vTy_lfMaDqE48mRuMZJ_nBP2R4qbDG7wYEA3vtIeHOhMTTxjYHPZzGPcJrWvaIokP0EaRrMGf_1UoP2') || saved.includes('AKfycbyuTz4pZYeqgFd0P0BnmoTGfJIKtN9Cw2gwfspIqKbLFRUpjLyBJEeqBe0tfqk85cxu-w') || saved.includes('AKfycbwMnOu5j1J_8WK_hY5SZkvKNIgQflJgDcXPTIOghTwo7zo7-kNdhFRFXqDKFOQyVtw')) {
+      if (defaultSheetUrl) {
+        localStorage.setItem('repro_sheets_api_url', defaultSheetUrl);
+      } else {
+        localStorage.removeItem('repro_sheets_api_url');
+      }
       return defaultSheetUrl;
     }
     return saved;
@@ -964,9 +968,11 @@ export default function App() {
     );
   }
 
-  const isAuthUnlocked = Boolean(user || isGuestMode);
+  const isAdmin = Boolean(user?.perfil === 'admin' || user?.id === 'local_admin' || user?.id === 'local_supervisor');
+  const isUser = Boolean(user?.perfil === 'user' || user?.id === 'local_user');
+  const isAuthUnlocked = isAdmin || isUser || isGuestMode;
 
-  // Filter tabs based on auth status
+  // Filter tabs based on auth status and profile
   const navigationTabs = useMemo(() => {
     const allTabs = [
       { id: 'cronometro', label: 'Cronômetro', icon: <Clock size={15} /> },
@@ -980,11 +986,18 @@ export default function App() {
       { id: 'followup', label: 'Follow-up Semanal', icon: <CalendarClock size={15} /> }
     ];
 
-    if (!isAuthUnlocked) {
-      return allTabs.filter(tab => !['gestao', 'followup'].includes(tab.id));
+    if (isAdmin) {
+      return allTabs;
     }
-    return allTabs;
-  }, [isAuthUnlocked]);
+    
+    if (isUser) {
+      // Cliente final vê apenas operacionais
+      return allTabs.filter(tab => ['cronometro', 'ruas', 'artigos', 'apoio'].includes(tab.id));
+    }
+    
+    // Visitante (não logado)
+    return allTabs.filter(tab => !['gestao', 'painel', 'followup', 'historico', 'tv'].includes(tab.id));
+  }, [isAdmin, isUser]);
 
   const activeTabDetails = navigationTabs.find(t => t.id === activeTab) || navigationTabs[0];
 
@@ -1462,9 +1475,9 @@ export default function App() {
           </div>
         )}
 
-        {/* ABA: GESTÃO / AUDITORIA / SHEETS (PROTEGIDO POR LOGIN) */}
+        {/* ABA: GESTÃO / AUDITORIA / SHEETS (PROTEGIDO POR LOGIN ADMIN) */}
         {activeTab === 'gestao' && (
-          !isAuthUnlocked ? (
+          !isAdmin ? (
             <AuthLoginCard
               requestedTabName="Gestão & Sheets"
               onNavigateToTab={(t) => handleTabChange(t)}
@@ -1494,9 +1507,9 @@ export default function App() {
           )
         )}
 
-        {/* ABA 4: PAINEL OPERACIONAL (PROTEGIDO POR LOGIN) */}
+        {/* ABA 4: PAINEL OPERACIONAL (PROTEGIDO POR LOGIN ADMIN) */}
         {activeTab === 'painel' && (
-          !isAuthUnlocked ? (
+          !isAdmin ? (
             <AuthLoginCard
               requestedTabName="Painel Operacional"
               onNavigateToTab={(t) => handleTabChange(t)}
@@ -1572,9 +1585,9 @@ export default function App() {
           </div>
         )}
 
-        {/* ABA 5: FOLLOW-UP SEMANAL (PROTEGIDO POR LOGIN) */}
+        {/* ABA 5: FOLLOW-UP SEMANAL (PROTEGIDO POR LOGIN ADMIN) */}
         {activeTab === 'followup' && (
-          !isAuthUnlocked ? (
+          !isAdmin ? (
             <AuthLoginCard
               requestedTabName="Follow-up Semanal"
               onNavigateToTab={(t) => handleTabChange(t)}

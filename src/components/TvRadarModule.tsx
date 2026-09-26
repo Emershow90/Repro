@@ -393,7 +393,7 @@ export const TvRadarModule: React.FC<TvRadarModuleProps> = ({ onClose, isStandal
   };
 
   // Determina URLs de transmissão para exibir na tela
-  const internalTvUrl = networkInfo?.tvUrlInternal || `http://localhost:3000/?mode=tv`;
+  const internalTvUrl = networkInfo?.tvUrlInternal || (typeof window !== 'undefined' ? `${window.location.origin}/?mode=tv` : '/?mode=tv');
   const externalTvUrl = networkInfo?.tvUrlExternal || (typeof window !== 'undefined' ? `${window.location.origin}/?mode=tv` : '');
   const viewerIp = networkInfo?.clientIp || '127.0.0.1';
   const isViewerInternal = networkInfo?.isClientInternal ?? true;

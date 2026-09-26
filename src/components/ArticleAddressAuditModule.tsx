@@ -52,7 +52,7 @@ import {
   exportRecordsToExcel,
   exportRecordsToCsv
 } from '../services/articleAddressService';
-import { fetchGoogleSheetData } from '../services/googleSheetsService';
+import { fetchJsonData } from '../sheetService';
 import { FiveSVisualReminder } from './FiveSVisualReminder';
 import { AddressMapVisualizer } from './AddressMapVisualizer';
 import { SequentialFlowAnalysis } from './SequentialFlowAnalysis';

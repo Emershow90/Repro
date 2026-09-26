@@ -31,7 +31,13 @@ import {
   Box,
   Layers
 } from 'lucide-react';
-import { ArticleAddressRecord } from '../services/articleAddressService';
+import {
+  ArticleAddressRecord,
+  auditArticleAddressRecord,
+  saveArticleAddressRecord,
+  clearAllArticleAddressRecords,
+} from '../services/articleAddressService';
+import { saveAuditLog } from '../services/dbLocal';
 
 export interface CtnTransactionRecord {
   id: string;
@@ -226,11 +232,13 @@ const DEFAULT_CTN_ROWS: CtnTransactionRecord[] = [
 interface CtnAuditLogIndexedDbViewProps {
   records?: ArticleAddressRecord[];
   onNotify?: (msg: string, color?: string) => void;
+  onRefreshRecords?: () => Promise<void>;
 }
 
 export const CtnAuditLogIndexedDbView: React.FC<CtnAuditLogIndexedDbViewProps> = ({
   records = [],
-  onNotify
+  onNotify,
+  onRefreshRecords,
 }) => {
   const [showSyncToast, setShowSyncToast] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -239,9 +247,31 @@ export const CtnAuditLogIndexedDbView: React.FC<CtnAuditLogIndexedDbViewProps> =
   const [selectedDrawerItem, setSelectedDrawerItem] = useState<CtnTransactionRecord | null>(null);
 
   // Combina dados da tabela
+  const isExampleData = !records || records.length === 0;
+  
   const ctnList = useMemo(() => {
+    if (!isExampleData) {
+      return records.map(r => ({
+        id: r.id,
+        dataHora: `${r.data} ${r.hora || '00:00'}`,
+        data: r.data,
+        hora: r.hora || '00:00',
+        contenantPai: r.contenantPai || 'N/A',
+        enderecoOrigem: r.enderecoOrigem || r.rua || 'N/A',
+        zonaOrigem: r.zonaOrigem || 'RPAL',
+        artigo: r.artigo,
+        ctnFilho: `CTN-${r.id.substring(0, 6).toUpperCase()}`,
+        enderecoTampao: r.enderecoTampao || 'N/A',
+        zonaNova: r.zonaDestino || 'N/A',
+        enderecoApontamento: r.endereco,
+        qtd: parseInt(r.ctn, 10) || 0,
+        status: r.statusAuditoria,
+        detalheInconsistencia: r.mensagensAuditoria?.length ? r.mensagensAuditoria.join('; ') : undefined,
+        operador: r.colaborador || 'Não disponível',
+      } as CtnTransactionRecord));
+    }
     return DEFAULT_CTN_ROWS;
-  }, []);
+  }, [records, isExampleData]);
 
   const filteredCtnList = useMemo(() => {
     return ctnList.filter(item => {
@@ -261,15 +291,17 @@ export const CtnAuditLogIndexedDbView: React.FC<CtnAuditLogIndexedDbViewProps> =
     });
   }, [ctnList, statusFilter, searchQuery]);
 
-  const handleTriggerSync = () => {
+  const handleTriggerSync = async () => {
     setIsSyncing(true);
-    setShowSyncToast(true);
-    setTimeout(() => {
+    try {
+      if (onRefreshRecords) await onRefreshRecords();
+      onNotify?.(`✓ Base recarregada: ${records.length} registros locais.`, 'var(--color-success)');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Erro desconhecido';
+      onNotify?.(`✗ Falha ao recarregar base: ${msg}`, 'var(--color-danger)');
+    } finally {
       setIsSyncing(false);
-      if (onNotify) {
-        onNotify('Base sincronizada via SSE com o AS400 (4.8 MB processados).', 'var(--color-success)');
-      }
-    }, 1200);
+    }
   };
 
   const handleExportCsv = () => {
@@ -323,17 +355,90 @@ export const CtnAuditLogIndexedDbView: React.FC<CtnAuditLogIndexedDbViewProps> =
     }
   };
 
-  const handleClearCache = () => {
-    if (window.confirm('Atenção: Deseja realmente purgar registros temporários antigos? Apenas bipes já sincronizados com o AS400 serão arquivados.')) {
-      if (onNotify) {
-        onNotify('Cache IndexedDB otimizado com sucesso. Espaço liberado: 1.2 MB.', 'var(--color-warning)');
-      }
+  const handleClearCache = async () => {
+    const confirmMsg =
+      '⚠️ ATENÇÃO: Todos os registros locais de auditoria serão REMOVIDOS.\n' +
+      `Registros atuais: ${records.length}\n\n` +
+      'Continuar?';
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      await clearAllArticleAddressRecords();
+      await saveAuditLog({
+        id: `audit-clear-cache-${Date.now()}`,
+        timestamp: Date.now(),
+        tipo: 'AUDITORIA_5S',
+        setor: '87',
+        rua: 'GERAL',
+        operador: 'OPERADOR',
+        contexto: {
+          ctnPaiBipado: 'CLEAR_CACHE_LOCAL',
+          ctnFilhoBipado: `${records.length} registros removidos`,
+          artigoEsperado: 'LIMPEZA_LOCAL',
+        },
+        justificativa: `[LIMPEZA MANUAL] ${records.length} registros locais removidos pelo operador via CtnAuditLogIndexedDbView.`,
+        synced: false,
+      });
+      if (onRefreshRecords) await onRefreshRecords();
+      onNotify?.(`✓ ${records.length} registros locais removidos. Auditoria registrada.`, 'var(--color-warning)');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Erro desconhecido';
+      onNotify?.(`✗ Falha ao limpar cache: ${msg}`, 'var(--color-danger)');
     }
   };
 
-  const handleRevalidateItem = () => {
-    if (onNotify) {
-      onNotify('Integridade SHA-256 e apontamento AS400 reavaliados. Hash conferido e 100% idêntico.', 'var(--color-success)');
+  const handleRevalidateItem = async () => {
+    if (!selectedDrawerItem) {
+      onNotify?.('Nenhum item selecionado para reauditar.', 'var(--color-warning)');
+      return;
+    }
+
+    const original = records.find((r) => r.id === selectedDrawerItem.id);
+    if (!original) {
+      onNotify?.('Registro original não encontrado na base local.', 'var(--color-danger)');
+      return;
+    }
+
+    try {
+      const audit = auditArticleAddressRecord(original, records);
+      const updated: ArticleAddressRecord = {
+        ...original,
+        statusAuditoria: audit.status,
+        mensagensAuditoria: audit.mensagens,
+      };
+      await saveArticleAddressRecord(updated);
+
+      await saveAuditLog({
+        id: `audit-revalidate-${Date.now()}`,
+        timestamp: Date.now(),
+        tipo: 'AUDITORIA_5S',
+        setor: original.setor,
+        rua: original.rua,
+        operador: original.colaborador || 'OPERADOR',
+        contexto: {
+          ctnPaiBipado: original.contenantPai || 'N/A',
+          ctnFilhoBipado: original.ctn,
+          artigoEsperado: original.artigo,
+        },
+        justificativa: `[RE-AUDITORIA] ${original.statusAuditoria} → ${audit.status}. ${audit.mensagens.join(' | ')}`,
+        synced: false,
+      });
+
+      if (onRefreshRecords) await onRefreshRecords();
+      setSelectedDrawerItem({
+        ...selectedDrawerItem,
+        status: audit.status,
+        detalheInconsistencia: audit.mensagens.length > 0 ? audit.mensagens.join('; ') : undefined,
+      });
+
+      const icon = audit.status === 'VALIDADO' ? '✓' : audit.status === 'ALERTA' ? '⚠️' : '✗';
+      const color =
+        audit.status === 'VALIDADO' ? 'var(--color-success)'
+        : audit.status === 'ALERTA' ? 'var(--color-warning)'
+        : 'var(--color-danger)';
+      onNotify?.(`${icon} Re-auditado: ${audit.status} (${audit.mensagens.length} avisos).`, color);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Erro desconhecido';
+      onNotify?.(`✗ Falha ao reauditar: ${msg}`, 'var(--color-danger)');
     }
   };
 
@@ -361,6 +466,12 @@ export const CtnAuditLogIndexedDbView: React.FC<CtnAuditLogIndexedDbViewProps> =
       )}
 
       <div className="p-4 md:p-6 flex flex-col gap-4">
+        {isExampleData && (
+          <div className="w-full bg-yellow-500/10 border border-yellow-500/30 text-yellow-500 px-4 py-3 rounded-xl flex items-center gap-3 font-mono text-xs">
+            <AlertTriangle size={16} />
+            <span>Nenhum registro sincronizado. Exibindo dados de exemplo para fins de demonstração.</span>
+          </div>
+        )}
         {/* -------------------------------------------------------------
             TOP AUDITOR RIBBON & OPERATIONS HEADER
             ------------------------------------------------------------- */}
@@ -413,7 +524,7 @@ export const CtnAuditLogIndexedDbView: React.FC<CtnAuditLogIndexedDbViewProps> =
               className="bg-[#252a34] hover:bg-[#30353f] text-[#00f2fe] px-3.5 py-2 rounded-xl font-mono text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm border border-[#00f2fe]/20 cursor-pointer"
             >
               <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-              <span>Forçar Sincronização SSE</span>
+              <span>Recarregar Base Local</span>
             </button>
 
             <button
@@ -431,7 +542,7 @@ export const CtnAuditLogIndexedDbView: React.FC<CtnAuditLogIndexedDbViewProps> =
               className="bg-[#252a34] hover:bg-[#30353f] text-purple-300 px-3.5 py-2 rounded-xl font-mono text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm border border-purple-500/20 cursor-pointer"
             >
               <AlertTriangle size={14} className="text-rose-400" />
-              <span>Auditar Inconsistências (2)</span>
+              <span>Auditar Inconsistências ({ctnList.filter(c => c.status === 'ALERTA').length})</span>
             </button>
 
             <button
@@ -794,26 +905,24 @@ export const CtnAuditLogIndexedDbView: React.FC<CtnAuditLogIndexedDbViewProps> =
                 <h4 className="font-mono text-xs font-bold uppercase">Resumo das Inconsistências</h4>
               </div>
               <span className="font-mono text-[9px] bg-rose-500/20 text-rose-400 px-2 py-0.5 rounded-md font-bold border border-rose-500/30">
-                2 AÇÕES NECESSÁRIAS
+                {ctnList.filter(c => c.status === 'ALERTA').length} AÇÕES NECESSÁRIAS
               </span>
             </div>
 
             <div className="flex flex-col gap-2 my-1">
-              <div className="flex items-center justify-between font-mono text-xs p-2 bg-[#090e17] rounded-xl border border-white/5">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-rose-500" />
-                  <span className="text-white">CTN 235237 (SKU 2809267)</span>
-                </div>
-                <span className="text-rose-400 font-bold">Diferença: -2 cx</span>
-              </div>
-
-              <div className="flex items-center justify-between font-mono text-xs p-2 bg-[#090e17] rounded-xl border border-white/5">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-rose-500" />
-                  <span className="text-white">CTN 235310 (SKU 5858207)</span>
-                </div>
-                <span className="text-rose-400 font-bold">Conferir bipe duplo</span>
-              </div>
+              {ctnList.filter(c => c.status === 'ALERTA').length > 0 ? (
+                ctnList.filter(c => c.status === 'ALERTA').slice(0, 3).map(item => (
+                  <div key={item.id} className="flex items-center justify-between font-mono text-xs p-2 bg-[#090e17] rounded-xl border border-white/5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-rose-500" />
+                      <span className="text-white">CTN {item.ctnFilho}</span>
+                    </div>
+                    <span className="text-rose-400 font-bold">{item.detalheInconsistencia || 'Inconsistência'}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="p-2 text-slate-500 text-xs font-mono">Nenhuma inconsistência detectada.</div>
+              )}
             </div>
 
             <button
@@ -927,33 +1036,33 @@ export const CtnAuditLogIndexedDbView: React.FC<CtnAuditLogIndexedDbViewProps> =
                 </span>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">Terminal Coletor:</span>
-                  <span className="text-white">{selectedDrawerItem.terminal || 'Zebra TC57 (COL-042)'}</span>
+                  <span className="text-white">{selectedDrawerItem.terminal || 'Não disponível'}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">Operador Responsável:</span>
-                  <span className="text-white">{selectedDrawerItem.operador || 'Carlos Eduardo (ID #4092)'}</span>
+                  <span className="text-white">{selectedDrawerItem.operador || 'Não disponível'}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">Antena RFID Bipe:</span>
-                  <span className="text-white">{selectedDrawerItem.antenaRfid || 'PORTAL-N2-DOCK4'}</span>
+                  <span className="text-white">{selectedDrawerItem.antenaRfid || 'Não disponível'}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">Hash de Integridade:</span>
                   <span className="text-[#4edea3] text-[10px] truncate max-w-[200px]">
-                    {selectedDrawerItem.sha256Hash || 'e3b0c44298fc1c149afbf4c8996fb92427ae'}
+                    {selectedDrawerItem.sha256Hash || 'Não disponível'}
                   </span>
                 </div>
               </div>
 
               {/* Audit Note Box */}
-              <div className="p-3.5 bg-[#1b2029] rounded-xl border border-white/10 flex items-start gap-2.5">
-                <ShieldCheck size={18} className="text-[#4edea3] shrink-0 mt-0.5" />
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  {selectedDrawerItem.status === 'ALERTA'
-                    ? selectedDrawerItem.detalheInconsistencia || 'Atenção: Conferir saldo físico de caixas no endereço indicado antes da liberação.'
-                    : 'Registro consolidado na tabela AS400. Sem discrepâncias de inventário de gôndola. Nenhuma ação corretiva exigida.'}
-                </p>
-              </div>
+              {selectedDrawerItem.detalheInconsistencia && (
+                <div className="p-3.5 bg-[#1b2029] rounded-xl border border-white/10 flex items-start gap-2.5">
+                  <ShieldCheck size={18} className="text-[#4edea3] shrink-0 mt-0.5" />
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    {selectedDrawerItem.detalheInconsistencia}
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Drawer Footer Actions */}

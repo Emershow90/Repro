@@ -49,17 +49,33 @@ export default function AuthLoginCard({
 
     setIsSubmitting(true);
     try {
-      const validEmails = ['emerson.oliveira@decathlon.com', 'eolive50'];
+      const emailLower = email.trim().toLowerCase();
+      // admin - administrador
       if (
-        validEmails.includes(email.trim().toLowerCase()) &&
+        (emailLower === 'emerson.oliveira@decathlon.com' || emailLower === 'eolive50' || emailLower === 'admin') &&
         password === 'Ceju@281023'
       ) {
-        onSuccessToast('Sessão iniciada com sucesso!');
+        onSuccessToast('Sessão iniciada como Administrador!');
         onLoginSuccess({
           id: 'local_admin',
           email: email.trim(),
+          perfil: 'admin',
           user_metadata: {
-            full_name: 'Emerson Oliveira'
+            full_name: 'Administrador'
+          }
+        });
+      } 
+      // user - cliente final
+      else if (
+        emailLower === 'user' && password === 'user123'
+      ) {
+        onSuccessToast('Sessão iniciada como Cliente Final!');
+        onLoginSuccess({
+          id: 'local_user',
+          email: email.trim(),
+          perfil: 'user',
+          user_metadata: {
+            full_name: 'Cliente Final'
           }
         });
       } else {
@@ -83,6 +99,7 @@ export default function AuthLoginCard({
       onLoginSuccess({
         id: 'local_supervisor',
         email: 'supervisor@local',
+        perfil: 'admin',
         user_metadata: {
           full_name: 'Supervisor'
         }

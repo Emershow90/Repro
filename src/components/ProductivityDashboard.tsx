@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Clock, Box } from 'lucide-react';
-import { fetchSheetData } from '../services/dataConnector';
+import { fetchSheetData } from '../sheetService';
+import { SHEET_ID } from '../config/sheetConfig';
 
 interface StreetStats {
   street: string;
@@ -15,7 +16,7 @@ export const ProductivityDashboard: React.FC = () => {
   useEffect(() => {
     async function loadData() {
       try {
-        const data = await fetchSheetData();
+        const data = await fetchSheetData(SHEET_ID);
         if (data.length === 0) return;
 
         const streetMap: Record<string, StreetStats> = {};

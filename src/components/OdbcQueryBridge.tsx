@@ -694,11 +694,13 @@ def run_wms_query():
 if __name__ == "__main__":
     run_wms_query()`;
 
-  const curlSnippet = `curl -X POST "https://ais-dev-v7cs7z27o5sgkz4gfzqcea-17783458042.us-east1.run.app/api/odbc/query" \\
+  const apiEndpointUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/odbc/execute` : '/api/odbc/execute';
+
+  const curlSnippet = `curl -X POST "${apiEndpointUrl}" \\
   -H "Content-Type: application/json" \\
   -d '{
     "queryId": "${selectedQuery.id}",
-    "sql": "${selectedQuery.sql.replace(/\n/g, ' ')}"
+    "params": {}
   }'`;
 
   return (

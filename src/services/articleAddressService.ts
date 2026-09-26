@@ -1,24 +1,31 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * SERVIÇO DE REGISTRO, GESTÃO E AUDITORIA DE ARTIGO, ENDEREÇO E CTN
  * Conformidade com normas de segurança corporativas (Armazenamento 100% Local em IndexedDB)
- * Sem necessidade de banco de dados SQL externo ou queries não autorizadas.
+ *
+ * A-02 aplicado (2026-09-26): syncLocalStorageBackup deprecated (no-op).
+ * D-02 aplicado (2026-09-26): SEED_FLAG_KEY controla re-injeção de seeds.
  */
 
 import * as XLSX from 'xlsx';
-import { SECTOR_87_STREETS, SECTOR_88_STREETS, SECTOR_89_STREETS, SECTOR_90_STREETS } from '../data/streetData';
+import {
+  SECTOR_87_STREETS,
+  SECTOR_88_STREETS,
+  SECTOR_89_STREETS,
+  SECTOR_90_STREETS,
+} from '../data/streetData';
 
 export interface ArticleAddressRecord {
   id: string;
-  data: string; // YYYY-MM-DD
-  artigo: string; // Código ou SKU do Artigo
-  endereco: string; // Endereço final (Z.ap)
-  ctn: string; // Cont. Novo (Caixa)
-  rua: string; // Ex: B4VD
-  setor: string; // 87, 88, 89, 90 ou OUTROS
-  hora?: string; // HH:MM
+  data: string;
+  artigo: string;
+  endereco: string;
+  ctn: string;
+  rua: string;
+  setor: string;
+  hora?: string;
   colaborador?: string;
   origem: 'MANUAL' | 'PLANILHA' | 'COLETOR';
   observacoes?: string;
@@ -41,7 +48,7 @@ export interface ArticleAddressStats {
   totalCtn: number;
   mediaCtnPorEndereco: number;
   mediaEnderecosPorRua: number;
-  taxaIntegridade: number; // Porcentagem de registros 100% validados
+  taxaIntegridade: number;
   auditoriaResumo: {
     validados: number;
     alertas: number;
@@ -73,7 +80,10 @@ export interface ArticleAddressStats {
   datasDisponiveis: string[];
 }
 
-// Auxiliar para extrair Rua e Setor a partir do endereço digitado (ex: "B4VD-02" -> "B4VD", Setor 87)
+/* ============================================================
+ * PARSER DE RUA/SETOR
+ * ============================================================ */
+
 export function parseStreetAndSectorFromAddress(address: string): { rua: string; setor: string } {
   const clean = address.trim().toUpperCase();
   if (!clean) return { rua: 'OUTROS', setor: '87' };
@@ -84,7 +94,6 @@ export function parseStreetAndSectorFromAddress(address: string): { rua: string;
   } else if (clean.includes(' ')) {
     rua = clean.split(' ')[0].trim();
   } else if (clean.length > 4) {
-    // Ex: "B4VD02" -> "B4VD"
     rua = clean.substring(0, 4);
   }
 
@@ -101,26 +110,26 @@ export function parseStreetAndSectorFromAddress(address: string): { rua: string;
   return { rua, setor };
 }
 
-// Motor de Validação e Auditoria Cruzada de Artigo, Endereço e CTN
+/* ============================================================
+ * MOTOR DE AUDITORIA
+ * ============================================================ */
+
 export function auditArticleAddressRecord(
   rec: Partial<ArticleAddressRecord>,
   allRecords: ArticleAddressRecord[] = []
 ): { status: 'VALIDADO' | 'ALERTA' | 'INCONSISTENTE'; mensagens: string[] } {
   const mensagens: string[] = [];
 
-  // Validação 1: Artigo Obrigatório
   if (!rec.artigo || rec.artigo.trim().length === 0) {
     mensagens.push('Código do Artigo não preenchido.');
   }
 
-  // Validação 2: Endereço Obrigatório e Formato
   if (!rec.endereco || rec.endereco.trim().length === 0) {
     mensagens.push('Endereço não informado.');
   } else if (!rec.endereco.includes('-') && rec.endereco.trim().length < 4) {
     mensagens.push('Formato de endereço potencialmente inválido (ex esperado: B4VD-02).');
   }
 
-  // Validação 3: CTN (Quantidade de Caixas/Contêiner)
   const ctnNum = Number(rec.ctn);
   if (isNaN(ctnNum) || ctnNum <= 0) {
     mensagens.push('CTN deve ser um número maior que zero.');
@@ -128,27 +137,25 @@ export function auditArticleAddressRecord(
     mensagens.push(`Volume elevado de CTN (${ctnNum} caixas) para um único endereço.`);
   }
 
-  // Validação 4: Conflito de Endereço no Mesmo Dia (Dois artigos distintos no mesmo endereço)
   if (rec.endereco && rec.data) {
     const conflitos = allRecords.filter(
-      r => r.id !== rec.id &&
-           r.data === rec.data &&
-           r.endereco.toUpperCase() === (rec.endereco || '').toUpperCase() &&
-           r.artigo.toUpperCase() !== (rec.artigo || '').toUpperCase()
+      (r) =>
+        r.id !== rec.id &&
+        r.data === rec.data &&
+        r.endereco.toUpperCase() === (rec.endereco || '').toUpperCase() &&
+        r.artigo.toUpperCase() !== (rec.artigo || '').toUpperCase()
     );
-
     if (conflitos.length > 0) {
-      const outrosArtigos = Array.from(new Set(conflitos.map(c => c.artigo))).join(', ');
+      const outrosArtigos = Array.from(new Set(conflitos.map((c) => c.artigo))).join(', ');
       mensagens.push(`Endereço compartilhado no mesmo dia com outro(s) artigo(s): ${outrosArtigos}.`);
     }
   }
 
-  // Validação 5: Dispersão Excessiva do Artigo no Dia (mais de 4 ruas distintas)
   if (rec.artigo && rec.data) {
     const ruasDoArtigo = new Set(
       allRecords
-        .filter(r => r.data === rec.data && r.artigo.toUpperCase() === (rec.artigo || '').toUpperCase())
-        .map(r => r.rua)
+        .filter((r) => r.data === rec.data && r.artigo.toUpperCase() === (rec.artigo || '').toUpperCase())
+        .map((r) => r.rua)
     );
     if (rec.rua) ruasDoArtigo.add(rec.rua);
 
@@ -157,14 +164,8 @@ export function auditArticleAddressRecord(
     }
   }
 
-  // Determinação do Status Final de Auditoria
   let status: 'VALIDADO' | 'ALERTA' | 'INCONSISTENTE' = 'VALIDADO';
-  if (
-    !rec.artigo ||
-    !rec.endereco ||
-    isNaN(Number(rec.ctn)) ||
-    Number(rec.ctn) <= 0
-  ) {
+  if (!rec.artigo || !rec.endereco || isNaN(Number(rec.ctn)) || Number(rec.ctn) <= 0) {
     status = 'INCONSISTENTE';
   } else if (mensagens.length > 0) {
     status = 'ALERTA';
@@ -173,13 +174,25 @@ export function auditArticleAddressRecord(
   return { status, mensagens };
 }
 
-// -------------------------------------------------------------
-// CAMADA DE PERSISTÊNCIA LOCAL (INDEXEDDB SEGURO)
-// -------------------------------------------------------------
+/* ============================================================
+ * PERSISTÊNCIA LOCAL (INDEXEDDB)
+ * ============================================================ */
+
 const DB_NAME = 'ReproArticleAddressDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'article_records';
+
+/**
+ * @deprecated (A-02) Mantido apenas para leitura migratória de versões antigas.
+ * Remover em v6.0.
+ */
 const LOCAL_STORAGE_BACKUP_KEY = 'repro_article_records_backup';
+
+/**
+ * D-02: Flag persistente para seed único por dispositivo.
+ * Evita re-injeção de dados fictícios após limpeza manual.
+ */
+const SEED_FLAG_KEY = 'repro_article_seed_v1_executed';
 
 let idbPromise: Promise<IDBDatabase> | null = null;
 
@@ -213,7 +226,43 @@ function getDb(): Promise<IDBDatabase> {
   return idbPromise;
 }
 
-// Dados semente iniciais para auditoria e calibração caso a base esteja limpa
+/* ============================================================
+ * D-02: Helpers de controle de seed
+ * ============================================================ */
+
+async function hasEverBeenSeeded(): Promise<boolean> {
+  try {
+    if (localStorage.getItem(SEED_FLAG_KEY) === 'true') return true;
+  } catch {
+    return true; // fail-safe: assume já seedado
+  }
+  return false;
+}
+
+async function markAsSeeded(): Promise<void> {
+  try {
+    localStorage.setItem(SEED_FLAG_KEY, 'true');
+  } catch {
+    // ignora
+  }
+}
+
+/**
+ * API pública: reativa seed em ambiente de demonstração.
+ * Uso: telas de gestão, "Restaurar Dados Demo".
+ */
+export function resetSeedFlag(): void {
+  try {
+    localStorage.removeItem(SEED_FLAG_KEY);
+  } catch {
+    // ignora
+  }
+}
+
+/* ============================================================
+ * SEEDS INICIAIS
+ * ============================================================ */
+
 function getInitialSeedRecords(): ArticleAddressRecord[] {
   const hoje = new Date().toISOString().split('T')[0];
   const ontem = new Date(Date.now() - 86400000).toISOString().split('T')[0];
@@ -221,199 +270,116 @@ function getInitialSeedRecords(): ArticleAddressRecord[] {
 
   const seeds: Omit<ArticleAddressRecord, 'statusAuditoria' | 'mensagensAuditoria'>[] = [
     {
-      id: 'rec-seed-1',
-      data: hoje,
-      artigo: 'ART-3091',
-      endereco: 'B4VD-01',
-      ctn: '14',
-      rua: 'B4VD',
-      setor: '87',
-      hora: '08:15',
-      colaborador: 'EMERSON GONÇALVES',
-      origem: 'MANUAL',
-      observacoes: 'Palete conferido',
-      criadoEm: Date.now() - 15000000
+      id: 'rec-seed-1', data: hoje, artigo: 'ART-3091', endereco: 'B4VD-01',
+      ctn: '14', rua: 'B4VD', setor: '87', hora: '08:15',
+      colaborador: 'EMERSON GONÇALVES', origem: 'MANUAL',
+      observacoes: 'Palete conferido', criadoEm: Date.now() - 15000000,
     },
     {
-      id: 'rec-seed-2',
-      data: hoje,
-      artigo: 'ART-3091',
-      endereco: 'B4VD-02',
-      ctn: '10',
-      rua: 'B4VD',
-      setor: '87',
-      hora: '08:30',
-      colaborador: 'EMERSON GONÇALVES',
-      origem: 'MANUAL',
-      observacoes: '',
-      criadoEm: Date.now() - 14000000
+      id: 'rec-seed-2', data: hoje, artigo: 'ART-3091', endereco: 'B4VD-02',
+      ctn: '10', rua: 'B4VD', setor: '87', hora: '08:30',
+      colaborador: 'EMERSON GONÇALVES', origem: 'MANUAL',
+      observacoes: '', criadoEm: Date.now() - 14000000,
     },
     {
-      id: 'rec-seed-3',
-      data: hoje,
-      artigo: 'ART-4420',
-      endereco: 'B4VD-03',
-      ctn: '18',
-      rua: 'B4VD',
-      setor: '87',
-      hora: '08:45',
-      colaborador: 'EMERSON GONÇALVES',
-      origem: 'MANUAL',
-      observacoes: 'Demanda de reposição rápida',
-      criadoEm: Date.now() - 13000000
+      id: 'rec-seed-3', data: hoje, artigo: 'ART-4420', endereco: 'B4VD-03',
+      ctn: '18', rua: 'B4VD', setor: '87', hora: '08:45',
+      colaborador: 'EMERSON GONÇALVES', origem: 'MANUAL',
+      observacoes: 'Demanda de reposição rápida', criadoEm: Date.now() - 13000000,
     },
     {
-      id: 'rec-seed-4',
-      data: hoje,
-      artigo: 'ART-8105',
-      endereco: 'B4VA-01',
-      ctn: '22',
-      rua: 'B4VA',
-      setor: '87',
-      hora: '09:10',
-      colaborador: 'EMERSON GONÇALVES',
-      origem: 'PLANILHA',
-      observacoes: 'Lote prioritário',
-      criadoEm: Date.now() - 12000000
+      id: 'rec-seed-4', data: hoje, artigo: 'ART-8105', endereco: 'B4VA-01',
+      ctn: '22', rua: 'B4VA', setor: '87', hora: '09:10',
+      colaborador: 'EMERSON GONÇALVES', origem: 'PLANILHA',
+      observacoes: 'Lote prioritário', criadoEm: Date.now() - 12000000,
     },
     {
-      id: 'rec-seed-5',
-      data: hoje,
-      artigo: 'ART-8105',
-      endereco: 'B4VA-02',
-      ctn: '12',
-      rua: 'B4VA',
-      setor: '87',
-      hora: '09:25',
-      colaborador: 'EMERSON GONÇALVES',
-      origem: 'PLANILHA',
-      observacoes: '',
-      criadoEm: Date.now() - 11000000
+      id: 'rec-seed-5', data: hoje, artigo: 'ART-8105', endereco: 'B4VA-02',
+      ctn: '12', rua: 'B4VA', setor: '87', hora: '09:25',
+      colaborador: 'EMERSON GONÇALVES', origem: 'PLANILHA',
+      observacoes: '', criadoEm: Date.now() - 11000000,
     },
     {
-      id: 'rec-seed-6',
-      data: hoje,
-      artigo: 'ART-9921',
-      endereco: 'B4VB-04',
-      ctn: '8',
-      rua: 'B4VB',
-      setor: '87',
-      hora: '10:00',
-      colaborador: 'EMERSON GONÇALVES',
-      origem: 'MANUAL',
-      observacoes: '',
-      criadoEm: Date.now() - 10000000
+      id: 'rec-seed-6', data: hoje, artigo: 'ART-9921', endereco: 'B4VB-04',
+      ctn: '8', rua: 'B4VB', setor: '87', hora: '10:00',
+      colaborador: 'EMERSON GONÇALVES', origem: 'MANUAL',
+      observacoes: '', criadoEm: Date.now() - 10000000,
     },
     {
-      id: 'rec-seed-7',
-      data: ontem,
-      artigo: 'ART-5012',
-      endereco: 'B4UZ-01',
-      ctn: '16',
-      rua: 'B4UZ',
-      setor: '87',
-      hora: '14:20',
-      colaborador: 'EMERSON GONÇALVES',
-      origem: 'PLANILHA',
-      observacoes: 'Registro dia anterior',
-      criadoEm: Date.now() - 95000000
+      id: 'rec-seed-7', data: ontem, artigo: 'ART-5012', endereco: 'B4UZ-01',
+      ctn: '16', rua: 'B4UZ', setor: '87', hora: '14:20',
+      colaborador: 'EMERSON GONÇALVES', origem: 'PLANILHA',
+      observacoes: 'Registro dia anterior', criadoEm: Date.now() - 95000000,
     },
     {
-      id: 'rec-seed-8',
-      data: ontem,
-      artigo: 'ART-5012',
-      endereco: 'B4UZ-02',
-      ctn: '20',
-      rua: 'B4UZ',
-      setor: '87',
-      hora: '14:40',
-      colaborador: 'EMERSON GONÇALVES',
-      origem: 'PLANILHA',
-      observacoes: '',
-      criadoEm: Date.now() - 94000000
+      id: 'rec-seed-8', data: ontem, artigo: 'ART-5012', endereco: 'B4UZ-02',
+      ctn: '20', rua: 'B4UZ', setor: '87', hora: '14:40',
+      colaborador: 'EMERSON GONÇALVES', origem: 'PLANILHA',
+      observacoes: '', criadoEm: Date.now() - 94000000,
     },
     {
-      id: 'rec-seed-9',
-      data: anteontem,
-      artigo: 'ART-3091',
-      endereco: 'B5VG-01',
-      ctn: '25',
-      rua: 'B5VG',
-      setor: '88',
-      hora: '11:15',
-      colaborador: 'OPERADOR SETOR 88',
-      origem: 'MANUAL',
-      observacoes: 'Volumosos',
-      criadoEm: Date.now() - 180000000
-    }
+      id: 'rec-seed-9', data: anteontem, artigo: 'ART-3091', endereco: 'B5VG-01',
+      ctn: '25', rua: 'B5VG', setor: '88', hora: '11:15',
+      colaborador: 'OPERADOR SETOR 88', origem: 'MANUAL',
+      observacoes: 'Volumosos', criadoEm: Date.now() - 180000000,
+    },
   ];
 
-  return seeds.map(s => {
+  return seeds.map((s) => {
     const audit = auditArticleAddressRecord(s);
-    return {
-      ...s,
-      statusAuditoria: audit.status,
-      mensagensAuditoria: audit.mensagens
-    };
+    return { ...s, statusAuditoria: audit.status, mensagensAuditoria: audit.mensagens };
   });
 }
 
-// Carrega todos os registros do IndexedDB
+/* ============================================================
+ * CARREGAMENTO (D-02: seed controlado)
+ * ============================================================ */
+
 export async function loadArticleAddressRecords(): Promise<ArticleAddressRecord[]> {
   try {
     const db = await getDb();
-    return new Promise((resolve) => {
+
+    const results = await new Promise<ArticleAddressRecord[]>((resolve) => {
       const tx = db.transaction(STORE_NAME, 'readonly');
-      const store = tx.objectStore(STORE_NAME);
-      const req = store.getAll();
-
-      req.onsuccess = () => {
-        let results = req.result as ArticleAddressRecord[];
-        if (!results || results.length === 0) {
-          // Tenta carregar do backup do localStorage se houver
-          try {
-            const saved = localStorage.getItem(LOCAL_STORAGE_BACKUP_KEY);
-            if (saved) {
-              results = JSON.parse(saved);
-            }
-          } catch {}
-
-          if (!results || results.length === 0) {
-            results = getInitialSeedRecords();
-            saveBulkArticleAddressRecords(results).catch(() => {});
-          }
-        }
-        resolve(results);
-      };
-
-      req.onerror = () => {
-        resolve(getInitialSeedRecords());
-      };
+      const req = tx.objectStore(STORE_NAME).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
     });
+
+    // Caminho 1: Base tem dados → retorna
+    if (results.length > 0) return results;
+
+    // Caminho 2: Base vazia E nunca foi seedada → aplica seed uma única vez
+    const alreadySeeded = await hasEverBeenSeeded();
+    if (!alreadySeeded) {
+      const seeds = getInitialSeedRecords();
+      await saveBulkArticleAddressRecords(seeds);
+      await markAsSeeded();
+      if (import.meta.env.DEV) {
+        console.info(`[articleAddressService] Seed inicial aplicado: ${seeds.length} registros.`);
+      }
+      return seeds;
+    }
+
+    // Caminho 3: Base vazia MAS já foi seedada → respeita limpeza do gestor
+    return [];
   } catch (err) {
-    // Fallback LocalStorage
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_BACKUP_KEY);
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return getInitialSeedRecords();
+    console.warn('[articleAddressService] Falha ao carregar. Retornando vazio.', err);
+    return [];
   }
 }
 
-// Salva ou atualiza um registro individual
+/* ============================================================
+ * ESCRITA (A-02: sem espelho localStorage)
+ * ============================================================ */
+
 export async function saveArticleAddressRecord(record: ArticleAddressRecord): Promise<boolean> {
   try {
     const db = await getDb();
     return new Promise((resolve) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      store.put(record);
-
-      tx.oncomplete = () => {
-        // Atualiza espelho de backup
-        syncLocalStorageBackup();
-        resolve(true);
-      };
+      tx.objectStore(STORE_NAME).put(record);
+      tx.oncomplete = () => resolve(true);
       tx.onerror = () => resolve(false);
     });
   } catch {
@@ -421,22 +387,15 @@ export async function saveArticleAddressRecord(record: ArticleAddressRecord): Pr
   }
 }
 
-// Salva lote de registros (usado em importação de planilha)
 export async function saveBulkArticleAddressRecords(records: ArticleAddressRecord[]): Promise<boolean> {
+  if (records.length === 0) return true;
   try {
     const db = await getDb();
     return new Promise((resolve) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-
-      for (const rec of records) {
-        store.put(rec);
-      }
-
-      tx.oncomplete = () => {
-        syncLocalStorageBackup();
-        resolve(true);
-      };
+      for (const rec of records) store.put(rec);
+      tx.oncomplete = () => resolve(true);
       tx.onerror = () => resolve(false);
     });
   } catch {
@@ -444,19 +403,13 @@ export async function saveBulkArticleAddressRecords(records: ArticleAddressRecor
   }
 }
 
-// Exclui um registro por ID
 export async function deleteArticleAddressRecord(id: string): Promise<boolean> {
   try {
     const db = await getDb();
     return new Promise((resolve) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      store.delete(id);
-
-      tx.oncomplete = () => {
-        syncLocalStorageBackup();
-        resolve(true);
-      };
+      tx.objectStore(STORE_NAME).delete(id);
+      tx.oncomplete = () => resolve(true);
       tx.onerror = () => resolve(false);
     });
   } catch {
@@ -464,17 +417,21 @@ export async function deleteArticleAddressRecord(id: string): Promise<boolean> {
   }
 }
 
-// Limpa todos os registros
 export async function clearAllArticleAddressRecords(): Promise<boolean> {
   try {
     const db = await getDb();
     return new Promise((resolve) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      store.clear();
+      tx.objectStore(STORE_NAME).clear();
 
       tx.oncomplete = () => {
-        localStorage.removeItem(LOCAL_STORAGE_BACKUP_KEY);
+        // ✅ NÃO remove SEED_FLAG_KEY — respeita a intenção do gestor.
+        // Se quiser re-seedar, chamar resetSeedFlag() explicitamente.
+        try {
+          localStorage.removeItem(LOCAL_STORAGE_BACKUP_KEY);
+        } catch {
+          // ignora
+        }
         resolve(true);
       };
       tx.onerror = () => resolve(false);
@@ -484,40 +441,35 @@ export async function clearAllArticleAddressRecords(): Promise<boolean> {
   }
 }
 
-// Sincroniza espelho no localStorage
+/* ============================================================
+ * A-02: DEPRECATED — Espelho localStorage (no-op)
+ * ============================================================ */
+
+/** @deprecated (A-02) */
 async function syncLocalStorageBackup() {
-  try {
-    const db = await getDb();
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.getAll();
-    req.onsuccess = () => {
-      try {
-        localStorage.setItem(LOCAL_STORAGE_BACKUP_KEY, JSON.stringify(req.result));
-      } catch {}
-    };
-  } catch {}
+  if (import.meta.env.DEV) {
+    console.warn(
+      '[DEPRECATED] syncLocalStorageBackup() — use exportDatabaseSnapshot() ou supabaseBackupService.'
+    );
+  }
+  // no-op intencional
 }
 
-// -------------------------------------------------------------
-// MOTOR ANALÍTICO & ESTATÍSTICO (DASHBOARDS & AUDITORIA)
-// -------------------------------------------------------------
+/* ============================================================
+ * MOTOR ANALÍTICO (inalterado)
+ * ============================================================ */
+
 export function computeArticleAddressStats(
   records: ArticleAddressRecord[],
   filterDate?: string,
   filterSector?: string,
   filterStreet?: string
 ): ArticleAddressStats {
-  // 1. Aplica filtros
   let filtered = records;
-  if (filterDate && filterDate !== 'TODOS') {
-    filtered = filtered.filter(r => r.data === filterDate);
-  }
-  if (filterSector && filterSector !== 'TODOS') {
-    filtered = filtered.filter(r => r.setor === filterSector);
-  }
+  if (filterDate && filterDate !== 'TODOS') filtered = filtered.filter((r) => r.data === filterDate);
+  if (filterSector && filterSector !== 'TODOS') filtered = filtered.filter((r) => r.setor === filterSector);
   if (filterStreet && filterStreet !== 'TODOS') {
-    filtered = filtered.filter(r => r.rua.toUpperCase() === filterStreet.toUpperCase());
+    filtered = filtered.filter((r) => r.rua.toUpperCase() === filterStreet.toUpperCase());
   }
 
   const totalRegistros = filtered.length;
@@ -527,20 +479,12 @@ export function computeArticleAddressStats(
 
   const auditSummary = { validados: 0, alertas: 0, inconsistentes: 0 };
 
-  // Agrupadores
   const streetMap = new Map<string, {
-    rua: string;
-    setor: string;
-    enderecos: Set<string>;
-    artigos: Set<string>;
-    totalCtn: number;
+    rua: string; setor: string; enderecos: Set<string>; artigos: Set<string>; totalCtn: number;
   }>();
 
   const articleMap = new Map<string, {
-    artigo: string;
-    totalCtn: number;
-    enderecos: Set<string>;
-    ruas: Set<string>;
+    artigo: string; totalCtn: number; enderecos: Set<string>; ruas: Set<string>;
   }>();
 
   for (const rec of filtered) {
@@ -548,20 +492,15 @@ export function computeArticleAddressStats(
     addressesSet.add(rec.endereco.toUpperCase());
     totalCtn += Number(rec.ctn) || 0;
 
-    // Resumo de auditoria
     if (rec.statusAuditoria === 'VALIDADO') auditSummary.validados++;
     else if (rec.statusAuditoria === 'ALERTA') auditSummary.alertas++;
     else auditSummary.inconsistentes++;
 
-    // Agrupamento por Rua
     const ruaKey = rec.rua.toUpperCase();
     if (!streetMap.has(ruaKey)) {
       streetMap.set(ruaKey, {
-        rua: ruaKey,
-        setor: rec.setor,
-        enderecos: new Set(),
-        artigos: new Set(),
-        totalCtn: 0
+        rua: ruaKey, setor: rec.setor,
+        enderecos: new Set(), artigos: new Set(), totalCtn: 0,
       });
     }
     const stItem = streetMap.get(ruaKey)!;
@@ -569,14 +508,10 @@ export function computeArticleAddressStats(
     stItem.artigos.add(rec.artigo.toUpperCase());
     stItem.totalCtn += Number(rec.ctn) || 0;
 
-    // Agrupamento por Artigo
     const artKey = rec.artigo.toUpperCase();
     if (!articleMap.has(artKey)) {
       articleMap.set(artKey, {
-        artigo: artKey,
-        totalCtn: 0,
-        enderecos: new Set(),
-        ruas: new Set()
+        artigo: artKey, totalCtn: 0, enderecos: new Set(), ruas: new Set(),
       });
     }
     const artItem = articleMap.get(artKey)!;
@@ -585,32 +520,22 @@ export function computeArticleAddressStats(
     artItem.ruas.add(rec.rua.toUpperCase());
   }
 
-  // Lista de Ruas formatada
-  const enderecosPorRua = Array.from(streetMap.values()).map(s => ({
-    rua: s.rua,
-    setor: s.setor,
-    totalEnderecos: s.enderecos.size,
-    totalCtn: s.totalCtn,
-    artigos: Array.from(s.artigos),
-    totalArtigos: s.artigos.size
+  const enderecosPorRua = Array.from(streetMap.values()).map((s) => ({
+    rua: s.rua, setor: s.setor,
+    totalEnderecos: s.enderecos.size, totalCtn: s.totalCtn,
+    artigos: Array.from(s.artigos), totalArtigos: s.artigos.size,
   })).sort((a, b) => b.totalEnderecos - a.totalEnderecos || b.totalCtn - a.totalCtn);
 
-  // Top Artigos
-  const topArtigos = Array.from(articleMap.values()).map(a => ({
-    artigo: a.artigo,
-    totalCtn: a.totalCtn,
+  const topArtigos = Array.from(articleMap.values()).map((a) => ({
+    artigo: a.artigo, totalCtn: a.totalCtn,
     totalEnderecos: a.enderecos.size,
-    ruas: Array.from(a.ruas),
-    totalRuas: a.ruas.size
+    ruas: Array.from(a.ruas), totalRuas: a.ruas.size,
   })).sort((a, b) => b.totalCtn - a.totalCtn || b.totalEnderecos - a.totalEnderecos);
 
-  // Top Ruas
   const topRuas = enderecosPorRua.slice(0, 10);
 
-  // Lista de datas distintas disponíveis para filtro
-  const datasDisponiveis = Array.from(new Set(records.map(r => r.data)))
-    .filter(Boolean)
-    .sort((a, b) => b.localeCompare(a));
+  const datasDisponiveis = Array.from(new Set(records.map((r) => r.data)))
+    .filter(Boolean).sort((a, b) => b.localeCompare(a));
 
   const totalArtigosUnicos = articlesSet.size;
   const totalEnderecosUnicos = addressesSet.size;
@@ -619,50 +544,34 @@ export function computeArticleAddressStats(
   const taxaIntegridade = totalRegistros > 0 ? Math.round((auditSummary.validados / totalRegistros) * 100) : 100;
 
   return {
-    totalRegistros,
-    totalArtigosUnicos,
-    totalEnderecosUnicos,
-    totalCtn,
-    mediaCtnPorEndereco,
-    mediaEnderecosPorRua,
-    taxaIntegridade,
+    totalRegistros, totalArtigosUnicos, totalEnderecosUnicos, totalCtn,
+    mediaCtnPorEndereco, mediaEnderecosPorRua, taxaIntegridade,
     auditoriaResumo: auditSummary,
-    enderecosPorRua,
-    topArtigos,
-    topRuas,
-    datasDisponiveis
+    enderecosPorRua, topArtigos, topRuas, datasDisponiveis,
   };
 }
 
-// -------------------------------------------------------------
-// IMPORTAÇÃO E EXPORTAÇÃO (PLANILHAS, TSV, CSV, EXCEL)
-// -------------------------------------------------------------
+/* ============================================================
+ * IMPORTAÇÃO / EXPORTAÇÃO (inalterado)
+ * ============================================================ */
 
-/**
- * Importa dados colados diretamente do Excel ou Google Sheets (TSV/CSV)
- * Aceita cabeçalhos comuns: Artigo, Endereço, CTN / Caixas, Data
- */
 export function parsePastedSpreadsheetText(
   rawText: string,
   defaultDate: string = new Date().toISOString().split('T')[0],
   defaultOperator: string = 'OPERADOR'
 ): { validRecords: ArticleAddressRecord[]; errorCount: number } {
-  const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return { validRecords: [], errorCount: 0 };
 
   const validRecords: ArticleAddressRecord[] = [];
   let errorCount = 0;
 
-  // Detecta se a primeira linha é cabeçalho
   let startIndex = 0;
   const firstLine = lines[0].toLowerCase();
   if (
-    firstLine.includes('artigo') ||
-    firstLine.includes('endereço') ||
-    firstLine.includes('endereco') ||
-    firstLine.includes('ctn') ||
-    firstLine.includes('caixa') ||
-    firstLine.includes('sku')
+    firstLine.includes('artigo') || firstLine.includes('endereço') ||
+    firstLine.includes('endereco') || firstLine.includes('ctn') ||
+    firstLine.includes('caixa') || firstLine.includes('sku')
   ) {
     startIndex = 1;
   }
@@ -700,26 +609,17 @@ export function parsePastedSpreadsheetText(
         statusAuditoria: 'VALIDADO',
         mensagensAuditoria: [],
         criadoEm: Date.now() + i,
-        contenantPai,
-        enderecoOrigem,
-        zonaOrigem,
-        enderecoTampao,
-        zonaDestino,
-        unidade,
-        volumes
+        contenantPai, enderecoOrigem, zonaOrigem,
+        enderecoTampao, zonaDestino, unidade, volumes,
       };
 
       const audit = auditArticleAddressRecord(candidate, validRecords);
       candidate.statusAuditoria = audit.status;
       candidate.mensagensAuditoria = audit.mensagens;
 
-      if (candidate.artigo && candidate.endereco) {
-        validRecords.push(candidate);
-      } else {
-        errorCount++;
-      }
+      if (candidate.artigo && candidate.endereco) validRecords.push(candidate);
+      else errorCount++;
     } else {
-      // Fallback for existing simpler formats
       errorCount++;
     }
   }
@@ -727,11 +627,11 @@ export function parsePastedSpreadsheetText(
   return { validRecords, errorCount };
 }
 
-/**
- * Exporta registros para arquivo Excel (.xlsx)
- */
-export function exportRecordsToExcel(records: ArticleAddressRecord[], fileName: string = 'Artigos_Enderecos_CTN.xlsx') {
-  const dataRows = records.map(r => ({
+export function exportRecordsToExcel(
+  records: ArticleAddressRecord[],
+  fileName: string = 'Artigos_Enderecos_CTN.xlsx'
+): void {
+  const dataRows = records.map((r) => ({
     'Data de Registro': r.data,
     'Setor': r.setor,
     'Rua': r.rua,
@@ -749,7 +649,7 @@ export function exportRecordsToExcel(records: ArticleAddressRecord[], fileName: 
     'Mensagens de Auditoria': r.mensagensAuditoria.join('; '),
     'Origem': r.origem,
     'Colaborador': r.colaborador || '',
-    'Observações': r.observacoes || ''
+    'Observações': r.observacoes || '',
   }));
 
   const worksheet = XLSX.utils.json_to_sheet(dataRows);
@@ -758,23 +658,15 @@ export function exportRecordsToExcel(records: ArticleAddressRecord[], fileName: 
   XLSX.writeFile(workbook, fileName);
 }
 
-/**
- * Exporta registros para CSV compatível com Google Sheets e Excel
- */
 export function exportRecordsToCsv(records: ArticleAddressRecord[]): string {
   const headers = ['Data', 'Setor', 'Rua', 'Endereco', 'Artigo', 'CTN', 'Status_Auditoria', 'Mensagens', 'Origem', 'Colaborador'];
-  const rows = records.map(r => [
-    r.data,
-    r.setor,
-    r.rua,
-    r.endereco,
-    r.artigo,
-    r.ctn,
+  const rows = records.map((r) => [
+    r.data, r.setor, r.rua, r.endereco, r.artigo, r.ctn,
     r.statusAuditoria,
     `"${(r.mensagensAuditoria || []).join('; ')}"`,
     r.origem,
-    r.colaborador || ''
+    r.colaborador || '',
   ]);
-
-  return [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');
+  return [headers.join(';'), ...rows.map((r) => r.join(';'))].join('\n');
 }
+

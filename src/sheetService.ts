@@ -348,43 +348,13 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
     try {
       data = await jsonpFetch(apiUrl);
     } catch (err) {
-      console.warn('JSONP fetch failed, trying public proxies:', err);
-    }
-  }
-
-  // Tier 4: Public CORS proxy fallback for static hosts (e.g., Vercel, GH Pages)
-  if (!data) {
-    const corsProxies = [
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(apiUrl)}`
-    ];
-
-    for (const proxyUrl of corsProxies) {
-      try {
-        const res = await fetch(proxyUrl, { method: 'GET' });
-        if (res.ok) {
-          const text = await res.text();
-          if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
-            try {
-              data = JSON.parse(text);
-              if (data) break;
-            } catch {
-              // Invalid JSON
-            }
-          } else if (text.includes(',') && (text.includes('\n') || text.includes('Carimbo') || text.includes('Setor') || text.includes('Colaborador'))) {
-            data = parseCSVData(text);
-            if (data && Array.isArray(data) && data.length > 0) break;
-          }
-        }
-      } catch {
-        // Next proxy
-      }
+      console.warn('JSONP fetch failed:', err);
     }
   }
 
   if (!data) {
     throw new Error(
-      'Não foi possível conectar à planilha Google. Verifique se o link está correto e se o Google Apps Script foi implantado com acesso "Qualquer pessoa" (Anyone).'
+      'Não foi possível conectar à planilha Google. Verifique se a URL do Google Apps Script está correta, implantada como Web App e com acesso definido para "Qualquer pessoa" (Anyone).'
     );
   }
 
@@ -526,6 +496,78 @@ export async function fetchFromGoogleSheets(apiUrlInput: string): Promise<Log[]>
   });
 
   return logs;
+}
+
+/**
+ * Generic Fetch for JSON data from an endpoint (e.g. Google Sheets JSON API)
+ */
+export async function fetchJsonData<T>(url: string): Promise<T | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP Error ${response.status}`);
+    return await response.json();
+  } catch (err) {
+    console.error('Error fetching JSON data:', err);
+    return null;
+  }
+}
+
+/**
+ * Fetches Sheet Data directly from Google Sheets API
+ */
+export async function fetchSheetData(sheetId: string, token: string = ''): Promise<any[]> {
+  // O token não é mais necessário com a estratégia de Planilha Pública + Apps Script Proxy
+  try {
+    // Nova estratégia: usar fetchJsonData (que usa o Web App) para buscar os dados 
+    // em vez de chamar a API v4 do Google Sheets diretamente.
+    // Presumindo que o Apps Script já foi configurado para retornar os dados da aba "Auditoria_Diaria"
+    const response = await fetch(`${sheetId}?action=get_auditoria_diaria`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch data from Google Sheets Proxy');
+    }
+
+    const data = await response.json();
+    const values = data.values || [];
+    if (values.length <= 1) return [];
+
+    const headers = values[0].map((h: string) => h.trim().toLowerCase());
+    
+    // Dynamic index mapping
+    // Usando 'endereço' como cabeçalho de endereço conforme solicitado
+    const addressIdx = headers.indexOf('endereço');
+    const qteIdx = headers.indexOf('qte');
+
+    return values.slice(1).map((row: any[]) => {
+      return {
+        address: addressIdx !== -1 ? row[addressIdx] : '',
+        qte: parseInt(qteIdx !== -1 ? row[qteIdx] : '0', 10) || 0
+      };
+    });
+  } catch (err) {
+    console.error('Error fetching sheet data:', err);
+    return [];
+  }
+}
+
+/**
+ * Generic POST for JSON data to an endpoint
+ */
+export async function postJsonData(url: string, data: any): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    const result = await response.json();
+    return result.status === 'success';
+  } catch (err) {
+    console.error('Error posting JSON data:', err);
+    return false;
+  }
 }
 
 /**
