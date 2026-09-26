@@ -127,14 +127,15 @@ export function auditArticleAddressRecord(
   if (!rec.endereco || rec.endereco.trim().length === 0) {
     mensagens.push('Endereço não informado.');
   } else if (!rec.endereco.includes('-') && rec.endereco.trim().length < 4) {
-    mensagens.push('Formato de endereço potencialmente inválido (ex esperado: B4VD-02).');
+    mensagens.push('Formato de endereço potencialmente incorreto ou atípico.');
   }
 
-  const ctnNum = Number(rec.ctn);
-  if (isNaN(ctnNum) || ctnNum <= 0) {
-    mensagens.push('CTN deve ser um número maior que zero.');
+  const ctnStr = String(rec.ctn || '').replace(/[^0-9]/g, '');
+  const ctnNum = Number(ctnStr);
+  if (!ctnStr || isNaN(ctnNum) || ctnNum <= 0) {
+    mensagens.push('CTN inválido ou não informado (assumido 1 por padrão).');
   } else if (ctnNum > 120) {
-    mensagens.push(`Volume elevado de CTN (${ctnNum} caixas) para um único endereço.`);
+    mensagens.push(`Volume elevado de CTN (${ctnNum}) para o endereço.`);
   }
 
   if (rec.endereco && rec.data) {
@@ -147,7 +148,7 @@ export function auditArticleAddressRecord(
     );
     if (conflitos.length > 0) {
       const outrosArtigos = Array.from(new Set(conflitos.map((c) => c.artigo))).join(', ');
-      mensagens.push(`Endereço compartilhado no mesmo dia com outro(s) artigo(s): ${outrosArtigos}.`);
+      mensagens.push(`Conflito: Endereço compartilhado hoje com: ${outrosArtigos}.`);
     }
   }
 
@@ -160,12 +161,12 @@ export function auditArticleAddressRecord(
     if (rec.rua) ruasDoArtigo.add(rec.rua);
 
     if (ruasDoArtigo.size > 4) {
-      mensagens.push(`Artigo fragmentado em ${ruasDoArtigo.size} ruas no mesmo dia (alerta de dispersão).`);
+      mensagens.push(`Dispersão: Artigo presente em ${ruasDoArtigo.size} ruas hoje.`);
     }
   }
 
   let status: 'VALIDADO' | 'ALERTA' | 'INCONSISTENTE' = 'VALIDADO';
-  if (!rec.artigo || !rec.endereco || isNaN(Number(rec.ctn)) || Number(rec.ctn) <= 0) {
+  if (!rec.artigo || !rec.endereco || !ctnStr || isNaN(ctnNum) || ctnNum <= 0) {
     status = 'INCONSISTENTE';
   } else if (mensagens.length > 0) {
     status = 'ALERTA';
@@ -580,45 +581,61 @@ export function parsePastedSpreadsheetText(
     const line = lines[i];
     const cols = line.split('\t');
 
+    let artigo = '';
+    let endereco = '';
+    let ctn = '1';
+    let data = defaultDate;
+    let volumes = 0;
+
+    // Detect format based on columns count
     if (cols.length >= 11) {
-      const data = cols[0];
-      const contenantPai = cols[1];
-      const enderecoOrigem = cols[2];
-      const zonaOrigem = cols[3];
-      const artigo = cols[4];
-      const ctn = cols[5];
-      const enderecoTampao = cols[6];
-      const zonaDestino = cols[7];
-      const endereco = cols[8];
-      const unidade = cols[9];
-      const volumes = parseInt(cols[10], 10);
+      // Full WMS format
+      data = cols[0] || defaultDate;
+      artigo = cols[4] || '';
+      ctn = cols[5] || '1';
+      endereco = cols[8] || '';
+      volumes = parseInt(cols[10], 10) || 0;
+    } else if (cols.length >= 3) {
+      // Basic 3+ column format: Artigo, Endereco, CTN
+      artigo = cols[0] || '';
+      endereco = cols[1] || '';
+      ctn = cols[2] || '1';
+    } else if (cols.length === 2) {
+      // Minimal format: Artigo, Endereco
+      artigo = cols[0] || '';
+      endereco = cols[1] || '';
+    }
 
-      const { rua, setor } = parseStreetAndSectorFromAddress(endereco);
+    if (!artigo || !endereco) {
+      errorCount++;
+      continue;
+    }
 
-      const candidate: ArticleAddressRecord = {
-        id: `rec-wms-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6)}`,
-        data: data || defaultDate,
-        artigo: artigo.toUpperCase(),
-        endereco: endereco.toUpperCase(),
-        ctn: ctn,
-        rua: rua.toUpperCase(),
-        setor,
-        hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        colaborador: defaultOperator,
-        origem: 'PLANILHA',
-        statusAuditoria: 'VALIDADO',
-        mensagensAuditoria: [],
-        criadoEm: Date.now() + i,
-        contenantPai, enderecoOrigem, zonaOrigem,
-        enderecoTampao, zonaDestino, unidade, volumes,
-      };
+    const { rua, setor } = parseStreetAndSectorFromAddress(endereco);
 
-      const audit = auditArticleAddressRecord(candidate, validRecords);
-      candidate.statusAuditoria = audit.status;
-      candidate.mensagensAuditoria = audit.mensagens;
+    const candidate: ArticleAddressRecord = {
+      id: `rec-wms-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6)}`,
+      data: data,
+      artigo: artigo.trim().toUpperCase(),
+      endereco: endereco.trim().toUpperCase(),
+      ctn: ctn.trim(),
+      rua: rua.toUpperCase(),
+      setor,
+      hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      colaborador: defaultOperator,
+      origem: 'PLANILHA',
+      statusAuditoria: 'VALIDADO',
+      mensagensAuditoria: [],
+      criadoEm: Date.now() + i,
+      volumes,
+    };
 
-      if (candidate.artigo && candidate.endereco) validRecords.push(candidate);
-      else errorCount++;
+    const audit = auditArticleAddressRecord(candidate, validRecords);
+    candidate.statusAuditoria = audit.status;
+    candidate.mensagensAuditoria = audit.mensagens;
+
+    if (candidate.statusAuditoria !== 'INCONSISTENTE') {
+      validRecords.push(candidate);
     } else {
       errorCount++;
     }

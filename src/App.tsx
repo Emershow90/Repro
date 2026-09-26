@@ -83,6 +83,8 @@ import {
 import GeneralShiftClosureModal from './components/GeneralShiftClosureModal';
 import InitialCheckpointModal from './components/InitialCheckpointModal';
 import { isShiftLocked } from './services/shiftClosureService';
+import { useRoleAccess } from './hooks/useRoleAccess';
+import type { AuthSession } from './services/authService';
 
 const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 
@@ -968,9 +970,7 @@ export default function App() {
     );
   }
 
-  const isAdmin = Boolean(user?.perfil === 'admin' || user?.id === 'local_admin' || user?.id === 'local_supervisor');
-  const isUser = Boolean(user?.perfil === 'user' || user?.id === 'local_user');
-  const isAuthUnlocked = isAdmin || isUser || isGuestMode;
+  const { role, isAdmin, definition, canAccessTab } = useRoleAccess();
 
   // Filter tabs based on auth status and profile
   const navigationTabs = useMemo(() => {
@@ -986,18 +986,13 @@ export default function App() {
       { id: 'followup', label: 'Follow-up Semanal', icon: <CalendarClock size={15} /> }
     ];
 
-    if (isAdmin) {
-      return allTabs;
-    }
-    
-    if (isUser) {
-      // Cliente final vê apenas operacionais
-      return allTabs.filter(tab => ['cronometro', 'ruas', 'artigos', 'apoio'].includes(tab.id));
+    if (role) {
+      return allTabs.filter(tab => canAccessTab(tab.id as any));
     }
     
     // Visitante (não logado)
     return allTabs.filter(tab => !['gestao', 'painel', 'followup', 'historico', 'tv'].includes(tab.id));
-  }, [isAdmin, isUser]);
+  }, [role, canAccessTab]);
 
   const activeTabDetails = navigationTabs.find(t => t.id === activeTab) || navigationTabs[0];
 
@@ -1158,6 +1153,22 @@ export default function App() {
                   <ShieldCheck size={14} className="text-indigo-400 shrink-0" />
                   <span className="hidden sm:inline text-[0.65rem] font-black uppercase tracking-wider">Finalizar Turno</span>
                 </button>
+              )}
+
+              {/* Badge S-01: Perfil logado */}
+              {role && (
+                <div
+                  className={`hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-mono font-bold ${
+                    isAdmin
+                      ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300'
+                      : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                  }`}
+                >
+                  {isAdmin ? <ShieldCheck size={13} /> : <User size={13} />}
+                  <span className="text-[0.62rem] uppercase tracking-wider">
+                    {definition?.shortLabel}
+                  </span>
+                </div>
               )}
 
               {/* Active Stopwatch Ticker */}
@@ -1481,9 +1492,19 @@ export default function App() {
             <AuthLoginCard
               requestedTabName="Gestão & Sheets"
               onNavigateToTab={(t) => handleTabChange(t)}
-              onLoginSuccess={(u) => {
-                setUser(u);
-                localStorage.setItem('repro_local_user', JSON.stringify(u));
+              onLoginSuccess={(session: AuthSession) => {
+                updateCurrentRole(session.role);
+                updateCurrentUser(session.fullName);
+                setUser({
+                  id: session.id,
+                  email: session.email,
+                  user_metadata: { full_name: session.fullName, role: session.role },
+                });
+                localStorage.setItem('repro_local_user', JSON.stringify({
+                  id: session.id,
+                  email: session.email,
+                  role: session.role,
+                }));
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
@@ -1513,9 +1534,19 @@ export default function App() {
             <AuthLoginCard
               requestedTabName="Painel Operacional"
               onNavigateToTab={(t) => handleTabChange(t)}
-              onLoginSuccess={(u) => {
-                setUser(u);
-                localStorage.setItem('repro_local_user', JSON.stringify(u));
+              onLoginSuccess={(session: AuthSession) => {
+                updateCurrentRole(session.role);
+                updateCurrentUser(session.fullName);
+                setUser({
+                  id: session.id,
+                  email: session.email,
+                  user_metadata: { full_name: session.fullName, role: session.role },
+                });
+                localStorage.setItem('repro_local_user', JSON.stringify({
+                  id: session.id,
+                  email: session.email,
+                  role: session.role,
+                }));
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
@@ -1591,9 +1622,19 @@ export default function App() {
             <AuthLoginCard
               requestedTabName="Follow-up Semanal"
               onNavigateToTab={(t) => handleTabChange(t)}
-              onLoginSuccess={(u) => {
-                setUser(u);
-                localStorage.setItem('repro_local_user', JSON.stringify(u));
+              onLoginSuccess={(session: AuthSession) => {
+                updateCurrentRole(session.role);
+                updateCurrentUser(session.fullName);
+                setUser({
+                  id: session.id,
+                  email: session.email,
+                  user_metadata: { full_name: session.fullName, role: session.role },
+                });
+                localStorage.setItem('repro_local_user', JSON.stringify({
+                  id: session.id,
+                  email: session.email,
+                  role: session.role,
+                }));
               }}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
