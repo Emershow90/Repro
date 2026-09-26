@@ -5,7 +5,7 @@
  * Cliente Supabase (singleton lazy) + operações de log e perfil.
  *
  * Refatorado em 2026-09-26:
- * - fail-fast se env vars ausentes (dev: log, prod: throw)
+ * - fail-soft: NUNCA lança no top-level (evita matar o app inteiro)
  * - tipagem SupabaseClient (era any)
  * - lazy init memoizado (evita reconexões WebSocket)
  * - removidas funções de auth OAuth/email (sistema usa PIN via RPC)
@@ -20,21 +20,20 @@ import {
 import { Log } from '../../types';
 
 // ============================================================
-// Env vars — validação fail-fast
+// Env vars — validação fail-soft
 // ============================================================
 
 const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+const hasSupabaseEnv = Boolean(supabaseUrl && supabaseAnonKey);
 
-const MISSING_ENV_MESSAGE =
-  '[supabase/client] VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY são obrigatórias. ' +
-  'Crie o arquivo .env na raiz do projeto e reinicie o dev server (npm run dev).';
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error(MISSING_ENV_MESSAGE);
-  if (import.meta.env?.PROD) {
-    throw new Error(MISSING_ENV_MESSAGE);
-  }
+// Log uma única vez (sem throw) — o app continua funcionando sem Supabase
+if (!hasSupabaseEnv) {
+  console.warn(
+    '[supabase/client] VITE_SUPABASE_URL e/ou VITE_SUPABASE_ANON_KEY ausentes. ' +
+    'Login admin e backup em nuvem estarão desabilitados. ' +
+    'Para habilitar, crie o .env e reinicie o dev server (ou configure na Vercel).'
+  );
 }
 
 // ============================================================
@@ -48,9 +47,7 @@ export function getSupabase(): SupabaseClient | null {
   if (_attempted) return _client;
   _attempted = true;
 
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return null;
-  }
+  if (!hasSupabaseEnv) return null;
 
   try {
     _client = createSupabaseClient(supabaseUrl, supabaseAnonKey);
@@ -62,27 +59,15 @@ export function getSupabase(): SupabaseClient | null {
 }
 
 /**
- * Instância única para uso direto (ex: `supabase.rpc(...)`).
- * Pode ser `null` se as env vars não estiverem configuradas.
- * Sempre cheque antes: `if (!supabase) return;`
+ * Instância única para uso direto (ex: `supabase?.rpc(...)`).
+ * Pode ser `null` — sempre cheque antes.
  */
 export const supabase = getSupabase();
-
-if (!supabase) {
-  console.error(
-    '[supabase/client] ⚠️ Cliente Supabase NÃO inicializado. ' +
-    'Login admin e backup em nuvem vão falhar.'
-  );
-}
 
 // ============================================================
 // Perfil (tabela 'perfil')
 // ============================================================
 
-/**
- * Upsert do perfil do usuário.
- * NOTA: created_at não é enviado — deixamos o DEFAULT NOW() do DB.
- */
 export async function syncPerfilDirectly(
   uid: string,
   email: string,
@@ -101,10 +86,6 @@ export async function syncPerfilDirectly(
   return data;
 }
 
-/**
- * Busca o perfil pelo UID.
- * Retorna `null` se não existir (PGRST116), sem propagar erro.
- */
 export async function fetchPerfilDirectly(uid: string) {
   const client = getSupabase();
   if (!client) return null;
@@ -115,7 +96,6 @@ export async function fetchPerfilDirectly(uid: string) {
     .eq('uid', uid)
     .single();
 
-  // PGRST116 = "no rows returned" — não é erro, é ausência
   if (error && error.code !== 'PGRST116') throw error;
   return data;
 }
@@ -124,14 +104,10 @@ export async function fetchPerfilDirectly(uid: string) {
 // Logs (tabela 'logs')
 // ============================================================
 
-/**
- * Envia logs para o Supabase (upsert por ID).
- * @returns Array de logs salvos, `[]` se input vazio, `null` em erro recuperável.
- */
 export async function saveLogsDirectly(logs: Log[], userUid: string) {
   const client = getSupabase();
   if (!client) return null;
-  if (!logs.length) return []; // guard: upsert vazio gera 400
+  if (!logs.length) return [];
 
   const formattedLogs = logs.map((log) => ({
     id: log.id,
@@ -166,10 +142,6 @@ export async function saveLogsDirectly(logs: Log[], userUid: string) {
   }
 }
 
-/**
- * Busca logs de um usuário ordenados por timestamp desc.
- * @returns Array (possivelmente vazio), nunca `null`.
- */
 export async function fetchLogsDirectly(userUid: string): Promise<Log[]> {
   const client = getSupabase();
   if (!client) return [];
@@ -207,9 +179,6 @@ export async function fetchLogsDirectly(userUid: string): Promise<Log[]> {
   }
 }
 
-/**
- * Deleta um log específico por ID, isolado por user_uid.
- */
 export async function deleteLogDirectly(logId: number, userUid: string) {
   const client = getSupabase();
   if (!client) return null;
@@ -232,10 +201,6 @@ export async function deleteLogDirectly(logId: number, userUid: string) {
   }
 }
 
-/**
- * Limpa TODOS os logs de um usuário.
- * ⚠️ Operação destrutiva — usar apenas com confirmação explícita.
- */
 export async function clearLogsDirectly(userUid: string) {
   const client = getSupabase();
   if (!client) return null;
