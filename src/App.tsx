@@ -990,8 +990,8 @@ export default function App() {
       return allTabs.filter(tab => canAccessTab(tab.id as any));
     }
     
-    // Visitante (não logado)
-    return allTabs.filter(tab => !['gestao', 'painel', 'followup', 'historico', 'tv'].includes(tab.id));
+    // Visitante (não logado): libera o 'painel' para que ele sirva como ponto de login
+    return allTabs.filter(tab => !['gestao', 'followup', 'historico', 'tv'].includes(tab.id));
   }, [role, canAccessTab]);
 
   const activeTabDetails = navigationTabs.find(t => t.id === activeTab) || navigationTabs[0];
