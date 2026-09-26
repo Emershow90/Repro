@@ -1,119 +1,109 @@
-import { createClient as createSupabaseClient } from '@supabase/supabase-js';
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Cliente Supabase (singleton lazy) + operações de log e perfil.
+ *
+ * Refatorado em 2026-09-26:
+ * - fail-fast se env vars ausentes (dev: log, prod: throw)
+ * - tipagem SupabaseClient (era any)
+ * - lazy init memoizado (evita reconexões WebSocket)
+ * - removidas funções de auth OAuth/email (sistema usa PIN via RPC)
+ * - guard contra upsert de array vazio
+ * - created_at removido do syncPerfil (deixa o DB decidir)
+ */
+
+import {
+  createClient as createSupabaseClient,
+  SupabaseClient,
+} from '@supabase/supabase-js';
 import { Log } from '../../types';
+
+// ============================================================
+// Env vars — validação fail-fast
+// ============================================================
 
 const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
 
-export const createClient = () => {
+const MISSING_ENV_MESSAGE =
+  '[supabase/client] VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY são obrigatórias. ' +
+  'Crie o arquivo .env na raiz do projeto e reinicie o dev server (npm run dev).';
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error(MISSING_ENV_MESSAGE);
+  if (import.meta.env?.PROD) {
+    throw new Error(MISSING_ENV_MESSAGE);
+  }
+}
+
+// ============================================================
+// Cliente singleton (lazy + memoizado)
+// ============================================================
+
+let _client: SupabaseClient | null = null;
+let _attempted = false;
+
+export function getSupabase(): SupabaseClient | null {
+  if (_attempted) return _client;
+  _attempted = true;
+
   if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error("Supabase VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY must be defined in your environment.");
+    return null;
   }
-  return createSupabaseClient(supabaseUrl, supabaseAnonKey);
-};
 
-// Singleton instance to use across client-side logic
-let supabaseInstance: any = null;
-try {
-  if (supabaseUrl && supabaseAnonKey) {
-    supabaseInstance = createClient();
+  try {
+    _client = createSupabaseClient(supabaseUrl, supabaseAnonKey);
+    return _client;
+  } catch (err) {
+    console.error('[supabase/client] Falha ao inicializar cliente:', err);
+    return null;
   }
-} catch (err) {
-  console.error("Failed to initialize Supabase client:", err);
-}
-
-export function getSupabase() {
-  if (!supabaseInstance) {
-    try {
-      supabaseInstance = createClient();
-    } catch (err) {
-      console.warn("Supabase is not available:", err);
-    }
-  }
-  return supabaseInstance;
-}
-
-export const supabase = getSupabase();
-
-export async function signInWithGoogle() {
-  const client = getSupabase();
-  if (!client) throw new Error("Supabase client não está inicializado. Configure as variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.");
-  const { data, error } = await client.auth.signInWithOAuth({
-    provider: 'google',
-    options: {
-      redirectTo: window.location.origin
-    }
-  });
-  if (error) throw error;
-  return data;
-}
-
-export async function signInWithEmailPassword(email: string, password: string) {
-  const client = getSupabase();
-  if (!client) throw new Error("Supabase client não está inicializado.");
-  const { data, error } = await client.auth.signInWithPassword({
-    email,
-    password,
-  });
-  if (error) throw error;
-  return data;
-}
-
-export async function signUpWithEmailPassword(email: string, password: string, fullName?: string) {
-  const client = getSupabase();
-  if (!client) throw new Error("Supabase client não está inicializado.");
-  const { data, error } = await client.auth.signUp({
-    email,
-    password,
-    options: {
-      data: {
-        full_name: fullName || email.split('@')[0],
-      }
-    }
-  });
-  if (error) throw error;
-  return data;
-}
-
-export async function signOutSupabase() {
-  const client = getSupabase();
-  if (client) {
-    await client.auth.signOut();
-  }
-}
-
-export async function getCurrentSupabaseUser() {
-  const client = getSupabase();
-  if (!client) return null;
-  const { data: { user } } = await client.auth.getUser();
-  return user;
 }
 
 /**
- * Sync profile 'perfil' table for user permissions
+ * Instância única para uso direto (ex: `supabase.rpc(...)`).
+ * Pode ser `null` se as env vars não estiverem configuradas.
+ * Sempre cheque antes: `if (!supabase) return;`
  */
-export async function syncPerfilDirectly(uid: string, email: string, name: string, role: string, sector: string) {
+export const supabase = getSupabase();
+
+if (!supabase) {
+  console.error(
+    '[supabase/client] ⚠️ Cliente Supabase NÃO inicializado. ' +
+    'Login admin e backup em nuvem vão falhar.'
+  );
+}
+
+// ============================================================
+// Perfil (tabela 'perfil')
+// ============================================================
+
+/**
+ * Upsert do perfil do usuário.
+ * NOTA: created_at não é enviado — deixamos o DEFAULT NOW() do DB.
+ */
+export async function syncPerfilDirectly(
+  uid: string,
+  email: string,
+  name: string,
+  role: string,
+  sector: string,
+) {
   const client = getSupabase();
   if (!client) return null;
 
   const { data, error } = await client
     .from('perfil')
-    .upsert({
-      uid,
-      email,
-      name,
-      role,
-      sector,
-      created_at: new Date().toISOString()
-    }, { onConflict: 'uid' });
+    .upsert({ uid, email, name, role, sector }, { onConflict: 'uid' });
 
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
   return data;
 }
 
 /**
- * Fetch profile 'perfil' table for user permissions
+ * Busca o perfil pelo UID.
+ * Retorna `null` se não existir (PGRST116), sem propagar erro.
  */
 export async function fetchPerfilDirectly(uid: string) {
   const client = getSupabase();
@@ -125,22 +115,25 @@ export async function fetchPerfilDirectly(uid: string) {
     .eq('uid', uid)
     .single();
 
-  if (error && error.code !== 'PGRST116') { // PGRST116 is code for no rows returned
-    throw error;
-  }
+  // PGRST116 = "no rows returned" — não é erro, é ausência
+  if (error && error.code !== 'PGRST116') throw error;
   return data;
 }
 
+// ============================================================
+// Logs (tabela 'logs')
+// ============================================================
+
 /**
- * Save log records directly into Supabase 'logs' table
+ * Envia logs para o Supabase (upsert por ID).
+ * @returns Array de logs salvos, `[]` se input vazio, `null` em erro recuperável.
  */
 export async function saveLogsDirectly(logs: Log[], userUid: string) {
   const client = getSupabase();
-  if (!client) {
-    return null;
-  }
+  if (!client) return null;
+  if (!logs.length) return []; // guard: upsert vazio gera 400
 
-  const formattedLogs = logs.map(log => ({
+  const formattedLogs = logs.map((log) => ({
     id: log.id,
     user_uid: userUid,
     data: log.data,
@@ -154,7 +147,7 @@ export async function saveLogsDirectly(logs: Log[], userUid: string) {
     vph: log.vph,
     timestamp: log.timestamp,
     synced: true,
-    tipo: log.tipo
+    tipo: log.tipo,
   }));
 
   try {
@@ -163,18 +156,19 @@ export async function saveLogsDirectly(logs: Log[], userUid: string) {
       .upsert(formattedLogs, { onConflict: 'id' });
 
     if (error) {
-      console.warn("Supabase upsert warning:", error.message);
+      console.warn('[supabase] saveLogsDirectly upsert:', error.message);
       return null;
     }
     return data;
   } catch (err: any) {
-    console.warn("Supabase saveLogsDirectly network error:", err?.message || err);
+    console.warn('[supabase] saveLogsDirectly network:', err?.message || err);
     return null;
   }
 }
 
 /**
- * Fetch logs for a specific user directly from Supabase 'logs' table
+ * Busca logs de um usuário ordenados por timestamp desc.
+ * @returns Array (possivelmente vazio), nunca `null`.
  */
 export async function fetchLogsDirectly(userUid: string): Promise<Log[]> {
   const client = getSupabase();
@@ -188,7 +182,7 @@ export async function fetchLogsDirectly(userUid: string): Promise<Log[]> {
       .order('timestamp', { ascending: false });
 
     if (error) {
-      console.warn("Supabase fetchLogsDirectly query error:", error.message);
+      console.warn('[supabase] fetchLogsDirectly:', error.message);
       return [];
     }
 
@@ -205,16 +199,16 @@ export async function fetchLogsDirectly(userUid: string): Promise<Log[]> {
       vph: item.vph,
       timestamp: item.timestamp,
       synced: true,
-      tipo: item.tipo
+      tipo: item.tipo,
     }));
   } catch (err: any) {
-    console.warn("Supabase fetchLogsDirectly network error:", err?.message || err);
+    console.warn('[supabase] fetchLogsDirectly network:', err?.message || err);
     return [];
   }
 }
 
 /**
- * Delete a log by ID directly from Supabase 'logs' table
+ * Deleta um log específico por ID, isolado por user_uid.
  */
 export async function deleteLogDirectly(logId: number, userUid: string) {
   const client = getSupabase();
@@ -228,18 +222,19 @@ export async function deleteLogDirectly(logId: number, userUid: string) {
       .eq('user_uid', userUid);
 
     if (error) {
-      console.warn("Supabase deleteLogDirectly error:", error.message);
+      console.warn('[supabase] deleteLogDirectly:', error.message);
       return null;
     }
     return data;
   } catch (err: any) {
-    console.warn("Supabase deleteLogDirectly network error:", err?.message || err);
+    console.warn('[supabase] deleteLogDirectly network:', err?.message || err);
     return null;
   }
 }
 
 /**
- * Clear all logs for a specific user directly from Supabase 'logs' table
+ * Limpa TODOS os logs de um usuário.
+ * ⚠️ Operação destrutiva — usar apenas com confirmação explícita.
  */
 export async function clearLogsDirectly(userUid: string) {
   const client = getSupabase();
@@ -252,12 +247,12 @@ export async function clearLogsDirectly(userUid: string) {
       .eq('user_uid', userUid);
 
     if (error) {
-      console.warn("Supabase clearLogsDirectly error:", error.message);
+      console.warn('[supabase] clearLogsDirectly:', error.message);
       return null;
     }
     return data;
   } catch (err: any) {
-    console.warn("Supabase clearLogsDirectly network error:", err?.message || err);
+    console.warn('[supabase] clearLogsDirectly network:', err?.message || err);
     return null;
   }
 }
