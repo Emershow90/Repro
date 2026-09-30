@@ -465,19 +465,32 @@ async function startServer() {
     res.json({ status: "OK", simulatedRecord: record });
   });
 
-  // Helper de Segurança Anti-SSRF: Allowlist estrita para endpoints do Google Apps Script
+  // Helper de Segurança Anti-SSRF: Allowlist para Google Apps Script e Planilhas Publicadas
   function isValidGoogleSheetsUrl(targetUrl: string): boolean {
     try {
       const parsed = new URL(targetUrl);
       if (parsed.protocol !== "https:") return false;
-      const allowedHosts = ["script.google.com", "script.googleusercontent.com"];
-      if (!allowedHosts.includes(parsed.hostname.toLowerCase())) {
-        return false;
+      
+      const hostname = parsed.hostname.toLowerCase();
+      
+      // ✅ Google Apps Script Web App (Apps Script /exec endpoint)
+      if (
+        (hostname === "script.google.com" || hostname === "script.googleusercontent.com") &&
+        parsed.pathname.startsWith("/macros/s/")
+      ) {
+        return true;
       }
-      if (!parsed.pathname.startsWith("/macros/s/")) {
-        return false;
+
+      // ✅ Published Google Sheet CSV (docs.google.com/spreadsheets/d/e/*/pub?output=csv)
+      if (
+        hostname === "docs.google.com" &&
+        parsed.pathname.startsWith("/spreadsheets/") &&
+        parsed.searchParams.get("output") === "csv"
+      ) {
+        return true;
       }
-      return true;
+
+      return false;
     } catch {
       return false;
     }
