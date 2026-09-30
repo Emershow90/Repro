@@ -190,15 +190,7 @@ body {
   padding: 0.2rem 0.55rem;
 }
 
-.btn-primary:hover:not(:disabled) {
-  opacity: 0.95;
-  transform: translateY(-1.5px);
-  box-shadow: 0 8px 22px rgba(16, 185, 129, 0.4);
-}
 
-.btn-primary:active:not(:disabled) {
-  transform: translateY(0) scale(0.98);
-}
 
 /* Links and Interactive Navigation */
 .nav-link {

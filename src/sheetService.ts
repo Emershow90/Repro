@@ -830,31 +830,87 @@ export async function syncAuditLogsToSheets(apiUrlInput: string): Promise<number
   const apiUrl = normalizeSheetUrl(apiUrlInput);
   const auditLogs = await getAuditLogs();
   const unsynced = auditLogs.filter(a => !a.synced);
-  
+
   if (unsynced.length === 0) return 0;
 
+  const body = JSON.stringify({
+    action: 'insert_audit',
+    payload: JSON.stringify(unsynced)
+  });
+
+  let success = false;
+
+  // Tier 1: Server-side proxy
   try {
-    const response = await fetch(apiUrl, {
+    const proxyRes = await fetch('/api/sheets/proxy', {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      redirect: 'follow',
-      body: JSON.stringify({
-        action: 'insert_audit',
-        payload: JSON.stringify(unsynced)
-      })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiUrl, payload: { action: 'insert_audit', dados: unsynced } })
     });
-
-    const text = await response.text();
-    const result = JSON.parse(text);
-
-    if (result.status === 'sucesso' || result.status === 'OK') {
-      for (const log of unsynced) {
-        await deleteAuditLog(log.id);
+    if (proxyRes.ok) {
+      const ct = proxyRes.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const result = await proxyRes.json();
+        if (result?.status === 'success') success = true;
+      } else {
+        // Proxy forwarded — assume success if HTTP 2xx
+        success = true;
       }
-      return unsynced.length;
     }
-  } catch (e) {
-    console.error("Erro na sync de auditoria:", e);
+  } catch {
+    // Fallback to direct fetch
   }
+
+  // Tier 2: Direct CORS fetch
+  if (!success) {
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        redirect: 'follow',
+        body
+      });
+      if (response.ok || response.type === 'opaque') {
+        // Try to parse response to confirm success; tolerate non-JSON
+        try {
+          const text = await response.text();
+          const result = JSON.parse(text);
+          if (result.status === 'sucesso' || result.status === 'OK' || result.status === 'success') {
+            success = true;
+          }
+        } catch {
+          // Non-JSON response — assume success for opaque/2xx
+          if (response.type === 'opaque' || response.ok) success = true;
+        }
+      }
+    } catch (e) {
+      console.warn('[syncAuditLogs] CORS fetch failed:', e);
+    }
+  }
+
+  // Tier 3: no-cors fallback (fire-and-forget write)
+  if (!success) {
+    try {
+      await fetch(apiUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body
+      });
+      success = true; // opaque — assume delivery
+    } catch (e) {
+      console.error('[syncAuditLogs] All tiers failed:', e);
+      return 0;
+    }
+  }
+
+  if (success) {
+    for (const log of unsynced) {
+      await deleteAuditLog(log.id);
+    }
+    return unsynced.length;
+  }
+
   return 0;
 }
+

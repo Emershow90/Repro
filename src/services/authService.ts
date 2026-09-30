@@ -45,7 +45,12 @@ export async function loginAdminWithPin(pin: string): Promise<AuthSession> {
     throw new Error('PIN deve ter no mínimo 4 dígitos.');
   }
 
-  const { data, error } = await supabase.rpc('verify_supervisor_pin', {
+  const client = supabase;
+  if (!client) {
+    throw new Error('Serviço Supabase não configurado. Configure as variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');
+  }
+
+  const { data, error } = await client.rpc('verify_supervisor_pin', {
     input_pin: cleanPin,
   });
 

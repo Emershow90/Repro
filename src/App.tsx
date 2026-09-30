@@ -184,6 +184,9 @@ export default function App() {
   const userRef = useRef(user);
   userRef.current = user;
   
+  // ---- Role Access (MUST be before any conditional returns - Rules of Hooks) ----
+  const { role, isAdmin, definition, canAccessTab } = useRoleAccess();
+
   const [timerState, setTimerState] = useState<AppTimerState>({
     cronometro: { ativo: false, inicio: 0, segundos: 0, atividade: '', botaoId: '', tipo: 'direta' },
     rascunhoColab: '',
@@ -192,6 +195,22 @@ export default function App() {
   const [panelSubTab, setPanelSubTab] = useState<'repro' | 'ruas'>('repro');
   const [inputOpen, setInputOpen] = useState(false);
   const [ticks, setTicks] = useState(0);
+
+  // Shared login success handler — eliminates triplicação de código
+  const handleLoginSuccess = useCallback((session: AuthSession) => {
+    updateCurrentRole(session.role);
+    updateCurrentUser(session.fullName);
+    setUser({
+      id: session.id,
+      email: session.email,
+      user_metadata: { full_name: session.fullName, role: session.role },
+    });
+    localStorage.setItem('repro_local_user', JSON.stringify({
+      id: session.id,
+      email: session.email,
+      role: session.role,
+    }));
+  }, [updateCurrentRole, updateCurrentUser]);
 
   // Estados de Fechamento Geral de Turno & Travamento de Edição
   const [isShiftLockedToday, setIsShiftLockedToday] = useState<boolean>(() => isShiftLocked());
@@ -970,7 +989,7 @@ export default function App() {
     );
   }
 
-  const { role, isAdmin, definition, canAccessTab } = useRoleAccess();
+  // useRoleAccess is now declared at the top of the component — do NOT redeclare here
 
   // Filter tabs based on auth status and profile
   const navigationTabs = useMemo(() => {
@@ -1492,20 +1511,7 @@ export default function App() {
             <AuthLoginCard
               requestedTabName="Gestão & Sheets"
               onNavigateToTab={(t) => handleTabChange(t)}
-              onLoginSuccess={(session: AuthSession) => {
-                updateCurrentRole(session.role);
-                updateCurrentUser(session.fullName);
-                setUser({
-                  id: session.id,
-                  email: session.email,
-                  user_metadata: { full_name: session.fullName, role: session.role },
-                });
-                localStorage.setItem('repro_local_user', JSON.stringify({
-                  id: session.id,
-                  email: session.email,
-                  role: session.role,
-                }));
-              }}
+              onLoginSuccess={handleLoginSuccess}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
             />
@@ -1534,20 +1540,7 @@ export default function App() {
             <AuthLoginCard
               requestedTabName="Painel Operacional"
               onNavigateToTab={(t) => handleTabChange(t)}
-              onLoginSuccess={(session: AuthSession) => {
-                updateCurrentRole(session.role);
-                updateCurrentUser(session.fullName);
-                setUser({
-                  id: session.id,
-                  email: session.email,
-                  user_metadata: { full_name: session.fullName, role: session.role },
-                });
-                localStorage.setItem('repro_local_user', JSON.stringify({
-                  id: session.id,
-                  email: session.email,
-                  role: session.role,
-                }));
-              }}
+              onLoginSuccess={handleLoginSuccess}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
             />
@@ -1622,20 +1615,7 @@ export default function App() {
             <AuthLoginCard
               requestedTabName="Follow-up Semanal"
               onNavigateToTab={(t) => handleTabChange(t)}
-              onLoginSuccess={(session: AuthSession) => {
-                updateCurrentRole(session.role);
-                updateCurrentUser(session.fullName);
-                setUser({
-                  id: session.id,
-                  email: session.email,
-                  user_metadata: { full_name: session.fullName, role: session.role },
-                });
-                localStorage.setItem('repro_local_user', JSON.stringify({
-                  id: session.id,
-                  email: session.email,
-                  role: session.role,
-                }));
-              }}
+              onLoginSuccess={handleLoginSuccess}
               onSuccessToast={(msg) => addToast(msg, 'var(--color-success)')}
               onErrorToast={(msg) => addToast(msg, 'var(--color-danger)')}
             />

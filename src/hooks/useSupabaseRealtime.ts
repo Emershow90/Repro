@@ -13,7 +13,8 @@ export function useSupabaseRealtime(tableName: string) {
   useEffect(() => {
     if (!tableName) return;
 
-    let clientToUse: SupabaseClient = defaultSupabase;
+    // Resolve client — pode ser null se Supabase não estiver configurado
+    let clientToUse: SupabaseClient | null = defaultSupabase;
 
     // Tenta usar a configuração salva no localStorage pelo SupabaseConfigModule
     try {
@@ -25,33 +26,30 @@ export function useSupabaseRealtime(tableName: string) {
         }
       }
     } catch (err) {
-      console.warn("Failed to parse local supabase config", err);
+      console.warn('[useSupabaseRealtime] Failed to parse local supabase config', err);
     }
 
     if (!clientToUse) {
-      console.warn("No Supabase client available for realtime subscriptions");
+      console.warn('[useSupabaseRealtime] No Supabase client available. Realtime disabled.');
       return;
     }
 
-    console.log(`Subscribing to realtime changes for table: ${tableName}`);
+    // A partir daqui, safeClient é garantidamente não-nulo
+    const safeClient: SupabaseClient = clientToUse;
 
-    const channel = clientToUse
+    const channel = safeClient
       .channel(`public:${tableName}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: tableName },
         (payload) => {
-          console.log('Realtime change received!', payload);
           setPayloads((prev) => [...prev, payload]);
           
           if (payload.eventType === 'INSERT') {
             const newRecord = payload.new;
-            // Se um operador iniciar um endereço, registra a trava
             if (newRecord.status === 'pending' && newRecord.endereco) {
               registerActivity(newRecord.colaborador || 'Desconhecido', newRecord.endereco);
             }
-            
-            // Se um operador concluiu, libera a trava para os demais
             if (newRecord.status === 'synced' && newRecord.endereco) {
               clearActivity(newRecord.endereco);
             }
@@ -67,8 +65,7 @@ export function useSupabaseRealtime(tableName: string) {
       });
 
     return () => {
-      console.log(`Unsubscribing from realtime changes for table: ${tableName}`);
-      clientToUse.removeChannel(channel);
+      safeClient.removeChannel(channel);
       setIsConnected(false);
     };
   }, [tableName, registerActivity, clearActivity]);
